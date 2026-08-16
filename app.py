@@ -16,6 +16,8 @@ import os
 import sys
 import time
 import math
+import json
+import argparse
 import colorsys
 import threading
 import atexit
@@ -84,6 +86,30 @@ EFFECTS = {
     "👆 Реакция на нажатие":  {"kind": "reactive",   "uses_color": True,  "animated": True,  "directional": False, "has_axis": False},
 }
 DEFAULT_EFFECT = "🎨 Сплошной цвет"
+
+# --- Сохранение последнего выбранного режима/цвета между запусками ---
+STATE_DIR  = os.path.join(os.path.expanduser("~"), ".config", "leobog-hi75c-studio")
+STATE_PATH = os.path.join(STATE_DIR, "state.json")
+
+
+def _load_saved_state():
+    try:
+        with open(STATE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _save_state(state):
+    try:
+        os.makedirs(STATE_DIR, exist_ok=True)
+        tmp_path = STATE_PATH + ".tmp"
+        with open(tmp_path, "w", encoding="utf-8") as f:
+            json.dump(state, f)
+        os.replace(tmp_path, STATE_PATH)
+    except Exception as e:
+        print(f"[СОСТОЯНИЕ] Не удалось сохранить настройки: {e}")
 
 HEARTBEAT_INTERVAL = 1.0
 ANIMATION_FPS       = 24
@@ -572,6 +598,7 @@ class LeobogController:
         self.speed = 1.0
         self.touches = []
         self._reactive_listener = None
+        self._save_timer = None
 
         self.running = True
         self._lock = threading.RLock()
@@ -579,12 +606,80 @@ class LeobogController:
         self._last_reported_state = None
         self._start_time = time.monotonic()
 
+        self._load_state()
+
         atexit.register(self.shutdown)
 
         self._worker = threading.Thread(
             target=self._worker_loop, daemon=True, name="leobog-worker"
         )
         self._worker.start()
+
+        # Если в прошлый раз был выбран режим "Реакция на нажатие" —
+        # слушатель нужно поднять сразу, иначе после автозапуска эффект
+        # выглядит выбранным, но не реагирует, пока его не переключить руками.
+        if EFFECTS[self.current_effect]["kind"] == "reactive":
+            self._start_reactive_listener()
+
+    def _load_state(self):
+        saved = _load_saved_state()
+        if not saved:
+            return
+        effect = saved.get("effect")
+        if effect in EFFECTS:
+            self.current_effect = effect
+        rgb = saved.get("rgb")
+        if isinstance(rgb, (list, tuple)) and len(rgb) == 3:
+            try:
+                self.current_rgb = tuple(max(0, min(255, int(c))) for c in rgb)
+            except (TypeError, ValueError):
+                pass
+        brightness = saved.get("brightness")
+        if isinstance(brightness, (int, float)):
+            self.brightness = max(0, min(100, int(brightness)))
+        direction = saved.get("direction")
+        if direction in (1, -1):
+            self.direction = direction
+        axis = saved.get("axis")
+        if axis in ("h", "v"):
+            self.axis = axis
+        speed = saved.get("speed")
+        if isinstance(speed, (int, float)) and speed > 0:
+            self.speed = float(speed)
+
+    def _persist_state(self):
+        # Слайдеры (яркость/скорость) шлют команду на каждое движение —
+        # без задержки это писало бы файл на диск десятки раз в секунду.
+        # Поэтому запись откладывается и схлопывается в одну на "успокоение".
+        with self._lock:
+            state = {
+                "effect": self.current_effect,
+                "rgb": list(self.current_rgb),
+                "brightness": self.brightness,
+                "direction": self.direction,
+                "axis": self.axis,
+                "speed": self.speed,
+            }
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+        self._save_timer = threading.Timer(0.4, _save_state, args=(state,))
+        self._save_timer.daemon = True
+        self._save_timer.start()
+
+    def _flush_state(self):
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+            self._save_timer = None
+        with self._lock:
+            state = {
+                "effect": self.current_effect,
+                "rgb": list(self.current_rgb),
+                "brightness": self.brightness,
+                "direction": self.direction,
+                "axis": self.axis,
+                "speed": self.speed,
+            }
+        _save_state(state)
 
     def _try_connect(self):
         try:
@@ -730,36 +825,42 @@ class LeobogController:
             self._start_reactive_listener()
         elif new_kind != "reactive" and old_kind == "reactive":
             self._stop_reactive_listener()
+        self._persist_state()
 
     def set_color(self, rgb):
         with self._lock:
             self.current_rgb = rgb
             t = time.monotonic() - self._start_time
             self._send_locked(self._build_payload(t))
+        self._persist_state()
 
     def set_brightness(self, value):
         with self._lock:
             self.brightness = int(value)
             t = time.monotonic() - self._start_time
             self._send_locked(self._build_payload(t))
+        self._persist_state()
 
     def set_speed(self, value):
         with self._lock:
             self.speed = max(0.1, value)
             t = time.monotonic() - self._start_time
             self._send_locked(self._build_payload(t))
+        self._persist_state()
 
     def set_direction(self, direction):
         with self._lock:
             self.direction = 1 if direction >= 0 else -1
             t = time.monotonic() - self._start_time
             self._send_locked(self._build_payload(t))
+        self._persist_state()
 
     def set_axis(self, axis):
         with self._lock:
             self.axis = "v" if axis == "v" else "h"
             t = time.monotonic() - self._start_time
             self._send_locked(self._build_payload(t))
+        self._persist_state()
 
     def is_connected(self):
         with self._lock:
@@ -768,6 +869,7 @@ class LeobogController:
     def shutdown(self):
         self.running = False
         self._stop_reactive_listener()
+        self._flush_state()
         with self._lock:
             if self.dev is not None:
                 try:
@@ -1299,18 +1401,24 @@ class App(ctk.CTk):
             selected_hover_color=PALETTE["accent_hi"], unselected_color=PALETTE["panel_alt"],
             text_color=PALETTE["text"], corner_radius=10, height=32,
         )
-        self.axis_seg.set(AXIS_H)
+        # Ось/направление/скорость восстанавливаются из сохранённого
+        # состояния (последний выбранный режим), а не сбрасываются на
+        # значения по умолчанию при каждом запуске.
+        init_axis = "v" if self.controller.axis == "v" else "h"
+        init_sign = 1 if self.controller.direction >= 0 else -1
+        self.axis_seg.set(AXIS_V if init_axis == "v" else AXIS_H)
         self.axis_seg.pack(fill="x", padx=18, pady=(0, 14))
 
         self.dir_title = self._label(left, "НАПРАВЛЕНИЕ")
         self.dir_title.pack(anchor="w", padx=18, pady=(0, 6))
+        init_dir_labels = (DIR_DOWN, DIR_UP) if init_axis == "v" else (DIR_RIGHT, DIR_LEFT)
         self.direction_seg = ctk.CTkSegmentedButton(
-            left, values=[DIR_RIGHT, DIR_LEFT], command=self._on_direction_change,
+            left, values=list(init_dir_labels), command=self._on_direction_change,
             fg_color=PALETTE["panel_alt"], selected_color=PALETTE["accent"],
             selected_hover_color=PALETTE["accent_hi"], unselected_color=PALETTE["panel_alt"],
             text_color=PALETTE["text"], corner_radius=10, height=32,
         )
-        self.direction_seg.set(DIR_RIGHT)
+        self.direction_seg.set(init_dir_labels[0] if init_sign >= 0 else init_dir_labels[1])
         self.direction_seg.pack(fill="x", padx=18, pady=(0, 18))
 
         self._label(left, "ЯРКОСТЬ").pack(anchor="w", padx=18, pady=(0, 4))
@@ -1337,10 +1445,11 @@ class App(ctk.CTk):
             progress_color=PALETTE["accent"], button_color=PALETTE["accent"],
             button_hover_color=PALETTE["accent_hi"],
         )
-        self.speed_slider.set(100)
+        init_speed_pct = max(25, min(400, round(self.controller.speed * 100)))
+        self.speed_slider.set(init_speed_pct)
         self.speed_slider.pack(side="left", fill="x", expand=True)
         self.speed_val_lbl = ctk.CTkLabel(
-            srow, text="100%", width=42,
+            srow, text=f"{init_speed_pct}%", width=42,
             font=ctk.CTkFont(size=12, weight="bold"), text_color=PALETTE["text"]
         )
         self.speed_val_lbl.pack(side="left", padx=(10, 0))
@@ -1649,12 +1758,20 @@ def _remove_lock():
         pass
 
 
-def _check_single_instance():
+def _check_single_instance(quiet=False):
     """Если приложение уже запущено (в трее или окном) — предупредить и
-    предложить закрыть старый процесс и перезапуститься, либо отменить запуск."""
+    предложить закрыть старый процесс и перезапуститься, либо отменить запуск.
+
+    При автозапуске (quiet=True) экран с вопросом не нужен: это, скорее
+    всего, повторный автозапуск при быстром релогине, поэтому новый
+    процесс просто тихо завершается, не мешая уже работающему."""
     pid = _read_lock_pid()
     if not _pid_alive(pid):
         return  # процесса нет — lock устарел, спокойно продолжаем
+
+    if quiet:
+        print(f"[ЗАПУСК] Уже работает (PID {pid}) — автозапуск пропущен.")
+        sys.exit(0)
 
     root = tk.Tk()
     root.withdraw()
@@ -1693,13 +1810,32 @@ def create_tray_image():
     return image
 
 
+def _parse_args():
+    parser = argparse.ArgumentParser(description="LEOBOG HI75C Studio")
+    parser.add_argument(
+        "--tray", "--autostart", "--minimized",
+        dest="start_in_tray", action="store_true",
+        help="Запуститься сразу свёрнутым в трей, не открывая окно "
+             "настроек. Для автозапуска вместе с Hyprland/DE: "
+             "exec-once = /путь/до/папки/run.sh --tray",
+    )
+    return parser.parse_args()
+
+
 def main():
-    _check_single_instance()
+    args = _parse_args()
+
+    _check_single_instance(quiet=args.start_in_tray)
     _write_lock()
     atexit.register(_remove_lock)
 
     controller = LeobogController()
     app = App(controller)
+
+    if args.start_in_tray:
+        # Не показываем окно вовсе — свет уже включится с последним
+        # сохранённым режимом/цветом сам, без открытия GUI на каждый вход.
+        app.withdraw()
 
     tray_holder = {"icon": None}
 
