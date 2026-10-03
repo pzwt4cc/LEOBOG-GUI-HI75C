@@ -12,17 +12,20 @@ LEOBOG HI75C RGB Studio v7
     кнопка «Свернуть в трей» сама переключается на обычное сворачивание.
 """
 
-import os
-import sys
-import time
-import math
-import json
 import argparse
-import colorsys
-import threading
 import atexit
+import colorsys
+import errno as _errno
+import fcntl
+import glob
+import json
+import math
+import os
 import signal
+import sys
 import tempfile
+import threading
+import time
 from tkinter import messagebox
 
 import usb.core
@@ -39,14 +42,18 @@ import tkinter as tk
 if "PYSTRAY_BACKEND" not in os.environ:
     try:
         import gi
+
         gi.require_version("AyatanaAppIndicator3", "0.1")
         from gi.repository import AyatanaAppIndicator3  # noqa: F401
+
         os.environ["PYSTRAY_BACKEND"] = "appindicator"
     except Exception:
         try:
             import gi
+
             gi.require_version("AppIndicator3", "0.1")
             from gi.repository import AppIndicator3  # noqa: F401
+
             os.environ["PYSTRAY_BACKEND"] = "appindicator"
         except Exception:
             pass
@@ -57,38 +64,105 @@ from PIL import Image, ImageDraw, ImageTk
 try:
     import evdev
     from evdev import ecodes
+
     EVDEV_AVAILABLE = True
 except ImportError:
     EVDEV_AVAILABLE = False
 
-VENDOR_ID       = 0x258a
-PRODUCT_ID      = 0x010c
-USB_INTERFACE   = 1
-PAYLOAD_SIZE    = 520
+VENDOR_ID = 0x258A
+PRODUCT_ID = 0x010C
+USB_INTERFACE = 1
+PAYLOAD_SIZE = 520
 TOTAL_LED_SLOTS = 170
 
-CMD1        = 0x06
+CMD1 = 0x06
 CMD2_CUSTOM = 0x08
-HEADER_B6   = 0x7a
-HEADER_B7   = 0x01
+HEADER_B6 = 0x7A
+HEADER_B7 = 0x01
 
 EFFECTS = {
-    "🎨 Сплошной цвет":       {"kind": "solid",      "uses_color": True,  "animated": False, "directional": False, "has_axis": False},
-    "🌬️ Дыхание":            {"kind": "breathe",    "uses_color": True,  "animated": True,  "directional": False, "has_axis": False},
-    "🌈 Радуга":              {"kind": "rainbow",    "uses_color": False, "animated": True,  "directional": True,  "has_axis": True},
-    "🎆 Цветопереход":        {"kind": "colorcycle", "uses_color": False, "animated": True,  "directional": True,  "has_axis": False},
-    "🌊 Волна":               {"kind": "wave",       "uses_color": True,  "animated": True,  "directional": True,  "has_axis": True},
-    "🐍 Змейка":              {"kind": "snake",      "uses_color": True,  "animated": True,  "directional": True,  "has_axis": True},
-    "🐍🐍 Двойная змейка":     {"kind": "dual_snake", "uses_color": True,  "animated": True,  "directional": True,  "has_axis": False},
-    "☄️ Комета":              {"kind": "comet",      "uses_color": True,  "animated": True,  "directional": True,  "has_axis": True},
-    "💫 Рябь":                {"kind": "ripple",     "uses_color": True,  "animated": True,  "directional": True,  "has_axis": True},
-    "✨ Мерцание":            {"kind": "twinkle",    "uses_color": True,  "animated": True,  "directional": False, "has_axis": False},
-    "👆 Реакция на нажатие":  {"kind": "reactive",   "uses_color": True,  "animated": True,  "directional": False, "has_axis": False},
+    "🎨 Сплошной цвет": {
+        "kind": "solid",
+        "uses_color": True,
+        "animated": False,
+        "directional": False,
+        "has_axis": False,
+    },
+    "🌬️ Дыхание": {
+        "kind": "breathe",
+        "uses_color": True,
+        "animated": True,
+        "directional": False,
+        "has_axis": False,
+    },
+    "🌈 Радуга": {
+        "kind": "rainbow",
+        "uses_color": False,
+        "animated": True,
+        "directional": True,
+        "has_axis": True,
+    },
+    "🎆 Цветопереход": {
+        "kind": "colorcycle",
+        "uses_color": False,
+        "animated": True,
+        "directional": True,
+        "has_axis": False,
+    },
+    "🌊 Волна": {
+        "kind": "wave",
+        "uses_color": True,
+        "animated": True,
+        "directional": True,
+        "has_axis": True,
+    },
+    "🐍 Змейка": {
+        "kind": "snake",
+        "uses_color": True,
+        "animated": True,
+        "directional": True,
+        "has_axis": True,
+    },
+    "🐍🐍 Двойная змейка": {
+        "kind": "dual_snake",
+        "uses_color": True,
+        "animated": True,
+        "directional": True,
+        "has_axis": False,
+    },
+    "☄️ Комета": {
+        "kind": "comet",
+        "uses_color": True,
+        "animated": True,
+        "directional": True,
+        "has_axis": True,
+    },
+    "💫 Рябь": {
+        "kind": "ripple",
+        "uses_color": True,
+        "animated": True,
+        "directional": True,
+        "has_axis": True,
+    },
+    "✨ Мерцание": {
+        "kind": "twinkle",
+        "uses_color": True,
+        "animated": True,
+        "directional": False,
+        "has_axis": False,
+    },
+    "👆 Реакция на нажатие": {
+        "kind": "reactive",
+        "uses_color": True,
+        "animated": True,
+        "directional": False,
+        "has_axis": False,
+    },
 }
 DEFAULT_EFFECT = "🎨 Сплошной цвет"
 
 # --- Сохранение последнего выбранного режима/цвета между запусками ---
-STATE_DIR  = os.path.join(os.path.expanduser("~"), ".config", "leobog-hi75c-studio")
+STATE_DIR = os.path.join(os.path.expanduser("~"), ".config", "leobog-hi75c-studio")
 STATE_PATH = os.path.join(STATE_DIR, "state.json")
 
 
@@ -111,30 +185,32 @@ def _save_state(state):
     except Exception as e:
         print(f"[СОСТОЯНИЕ] Не удалось сохранить настройки: {e}")
 
-HEARTBEAT_INTERVAL = 1.0
-ANIMATION_FPS       = 24
-ANIMATION_INTERVAL  = 1.0 / ANIMATION_FPS
-RECONNECT_INTERVAL  = 2.0
-WORKER_TICK         = 0.02
 
-BREATH_SPEED      = 1.4
-RAINBOW_SPEED     = 0.12
-COLORCYCLE_SPEED  = 0.10
-WAVE_SPEED        = 0.55
-SNAKE_SPEED       = 55.0
-SNAKE_LEN         = 18
-SNAKE_V_SPEED     = 2.4
-SNAKE_V_TRAIL     = 3
-COMET_SPEED       = 70.0
-COMET_LEN         = 30
-COMET_V_SPEED     = 3.0
-COMET_V_TRAIL     = 4
-RIPPLE_SPEED      = 0.9
-RIPPLE_SPREAD     = 3.2
-TWINKLE_HZ        = 6.0
-REACTIVE_SPEED       = 24.0
-REACTIVE_LIFETIME    = 1.1
-REACTIVE_RING_W      = 4.0
+HEARTBEAT_INTERVAL = 1.0
+ANIMATION_FPS = 24
+ANIMATION_INTERVAL = 1.0 / ANIMATION_FPS
+RECONNECT_INTERVAL = 2.0
+WORKER_TICK = 0.02
+
+BREATH_SPEED = 1.4
+RAINBOW_SPEED = 0.12
+COLORCYCLE_SPEED = 0.10
+WAVE_SPEED = 0.55
+SNAKE_SPEED = 55.0
+SNAKE_LEN = 18
+SNAKE_V_SPEED = 2.4
+SNAKE_V_TRAIL = 3
+COMET_SPEED = 70.0
+COMET_LEN = 30
+COMET_V_SPEED = 3.0
+COMET_V_TRAIL = 4
+RIPPLE_SPEED = 0.9
+RIPPLE_SPREAD = 3.2
+TWINKLE_HZ = 6.0
+REACTIVE_SPEED = 48.0  # колонок в секунду — быстро, "пронеслось"
+REACTIVE_LIFETIME = 0.65
+REACTIVE_REACH = 12.0  # на каком расстоянии свет гаснет совсем
+REACTIVE_EDGE = 1.5  # мягкость переднего края
 
 GRID_ROWS = 6
 GRID_COLS = math.ceil(TOTAL_LED_SLOTS / GRID_ROWS)
@@ -175,11 +251,84 @@ DIST_V = [abs(ROW_OF[i] - _CENTER_V) / _SPAN_V for i in range(TOTAL_LED_SLOTS)]
 # направо в каждом ряду. Кольцо теперь стартует именно там, где клавиша
 # физически расположена — слева/справа/сверху/снизу.
 KEY_ROWS = [
-    ["esc", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "delete"],
-    ["grave", "1", "2", "3", "4", "5", "6", "7", "8", "9", "0", "minus", "equal", "backspace"],
-    ["tab", "q", "w", "e", "r", "t", "y", "u", "i", "o", "p", "bracketleft", "bracketright", "backslash"],
-    ["capslock", "a", "s", "d", "f", "g", "h", "j", "k", "l", "semicolon", "apostrophe", "enter"],
-    ["shift_l", "z", "x", "c", "v", "b", "n", "m", "comma", "period", "slash", "shift_r", "up"],
+    [
+        "esc",
+        "f1",
+        "f2",
+        "f3",
+        "f4",
+        "f5",
+        "f6",
+        "f7",
+        "f8",
+        "f9",
+        "f10",
+        "f11",
+        "f12",
+        "delete",
+    ],
+    [
+        "grave",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "0",
+        "minus",
+        "equal",
+        "backspace",
+    ],
+    [
+        "tab",
+        "q",
+        "w",
+        "e",
+        "r",
+        "t",
+        "y",
+        "u",
+        "i",
+        "o",
+        "p",
+        "bracketleft",
+        "bracketright",
+        "backslash",
+    ],
+    [
+        "capslock",
+        "a",
+        "s",
+        "d",
+        "f",
+        "g",
+        "h",
+        "j",
+        "k",
+        "l",
+        "semicolon",
+        "apostrophe",
+        "enter",
+    ],
+    [
+        "shift_l",
+        "z",
+        "x",
+        "c",
+        "v",
+        "b",
+        "n",
+        "m",
+        "comma",
+        "period",
+        "slash",
+        "shift_r",
+        "up",
+    ],
     ["ctrl_l", "meta_l", "alt_l", "space", "alt_r", "ctrl_r", "left", "down", "right"],
 ]
 
@@ -190,8 +339,69 @@ for _row_i, _row_keys in enumerate(KEY_ROWS):
         KEY_GRID_POS[_key] = (_row_i, _col_i / max(1, _width - 1))
 
 
+# Физические координаты клавиш (в единицах ширины обычной клавиши) для
+# типичной 75%-раскладки: ширины клавиш в каждом ряду, суммарно ~15.
+_KEY_WIDTHS = [
+    [15 / 14.0] * 14,
+    [1] * 13 + [2],
+    [1.5] + [1] * 12 + [1.5],
+    [1.75] + [1] * 11 + [2.25],
+    [2.25] + [1] * 10 + [1.75, 1],
+    [1.25, 1.25, 1.25, 6.25, 1, 1, 1, 1, 1],
+]
+KEY_XY = {}
+for _ri, (_keys, _ws) in enumerate(zip(KEY_ROWS, _KEY_WIDTHS)):
+    _x = 0.0
+    for _k, _w in zip(_keys, _ws):
+        KEY_XY[_k] = (_x + _w / 2.0, float(_ri))
+        _x += _w
+
+# Карта "клавиша -> номер светодиода", которую создаёт калибровка
+# (запуск: ./run.sh --calibrate). Без неё порядок светодиодов неизвестен.
+KEYMAP_PATH = os.path.join(STATE_DIR, "keymap.json")
+
+
+def _load_keymap():
+    try:
+        with open(KEYMAP_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        km = {k: int(v) for k, v in data.items() if 0 <= int(v) < TOTAL_LED_SLOTS}
+        # Светодиоды идут по колонкам (6 на колонку): тильда стоит сразу
+        # под esc. Калибровка её нередко пропускает — достраиваем сами.
+        if "grave" not in km and "esc" in km and (km["esc"] + 1) not in km.values():
+            km["grave"] = km["esc"] + 1
+        # Колонка справа: Del, End, PgUp, PgDn идут подряд сверху вниз.
+        if "delete" in km:
+            for off, name in ((1, "end"), (2, "pageup"), (3, "pagedown")):
+                if name not in km and (km["delete"] + off) not in km.values():
+                    km[name] = km["delete"] + off
+        return km
+    except Exception:
+        return {}
+
+
+KEYMAP = _load_keymap()
+
+# Координаты каждого светодиода. С калибровкой — реальные (по клавишам),
+# без неё — грубое приближение по сетке.
+LED_XY = [None] * TOTAL_LED_SLOTS
+if KEYMAP:
+    # Калибровка показала: светодиоды идут по колонкам, 6 штук в колонке
+    # (номер = колонка * 6 + ряд). Координаты берём прямо из этой матрицы —
+    # так они точные и для клавиш, которых нет в калибровке.
+    _max_col = max(_i // 6 for _i in KEYMAP.values())
+    for _i in range(TOTAL_LED_SLOTS):
+        if _i // 6 <= _max_col:
+            LED_XY[_i] = (float(_i // 6), float(_i % 6))
+else:
+    for _i in range(TOTAL_LED_SLOTS):
+        LED_XY[_i] = (COL_OF[_i] / max(1, GRID_COLS - 1) * 15.0, float(ROW_OF[_i]))
+
+
 def _logical_key_to_idx(logical):
-    """Логическое имя клавиши -> индекс LED-слота в её физическом ряду."""
+    """Логическое имя клавиши -> индекс LED-слота."""
+    if KEYMAP:
+        return KEYMAP.get(logical)
     pos = KEY_GRID_POS.get(logical)
     if pos is None:
         return None
@@ -202,6 +412,7 @@ def _logical_key_to_idx(logical):
 
 
 if EVDEV_AVAILABLE:
+
     def _build_evdev_key_map():
         m = {}
         for ch in "abcdefghijklmnopqrstuvwxyz":
@@ -217,15 +428,41 @@ if EVDEV_AVAILABLE:
             if code is not None:
                 m[code] = f"f{n}"
         extra = {
-            "ESC": "esc", "DELETE": "delete", "GRAVE": "grave", "MINUS": "minus",
-            "EQUAL": "equal", "BACKSPACE": "backspace", "TAB": "tab",
-            "LEFTBRACE": "bracketleft", "RIGHTBRACE": "bracketright", "BACKSLASH": "backslash",
-            "CAPSLOCK": "capslock", "SEMICOLON": "semicolon", "APOSTROPHE": "apostrophe",
-            "ENTER": "enter", "LEFTSHIFT": "shift_l", "RIGHTSHIFT": "shift_r",
-            "COMMA": "comma", "DOT": "period", "SLASH": "slash", "UP": "up",
-            "LEFTCTRL": "ctrl_l", "RIGHTCTRL": "ctrl_r", "LEFTALT": "alt_l",
-            "RIGHTALT": "alt_r", "LEFTMETA": "meta_l", "RIGHTMETA": "meta_l",
-            "SPACE": "space", "LEFT": "left", "DOWN": "down", "RIGHT": "right",
+            "ESC": "esc",
+            "DELETE": "delete",
+            "GRAVE": "grave",
+            "MINUS": "minus",
+            "EQUAL": "equal",
+            "BACKSPACE": "backspace",
+            "TAB": "tab",
+            "LEFTBRACE": "bracketleft",
+            "RIGHTBRACE": "bracketright",
+            "BACKSLASH": "backslash",
+            "CAPSLOCK": "capslock",
+            "SEMICOLON": "semicolon",
+            "APOSTROPHE": "apostrophe",
+            "ENTER": "enter",
+            "LEFTSHIFT": "shift_l",
+            "RIGHTSHIFT": "shift_r",
+            "COMMA": "comma",
+            "DOT": "period",
+            "SLASH": "slash",
+            "UP": "up",
+            "LEFTCTRL": "ctrl_l",
+            "RIGHTCTRL": "ctrl_r",
+            "LEFTALT": "alt_l",
+            "RIGHTALT": "alt_r",
+            "LEFTMETA": "meta_l",
+            "RIGHTMETA": "meta_l",
+            "SPACE": "space",
+            "LEFT": "left",
+            "DOWN": "down",
+            "RIGHT": "right",
+            "END": "end",
+            "PAGEUP": "pageup",
+            "PAGEDOWN": "pagedown",
+            "HOME": "home",
+            "INSERT": "insert",
         }
         for name, logical in extra.items():
             code = getattr(ecodes, f"KEY_{name}", None)
@@ -242,21 +479,40 @@ def _evdev_code_to_idx(code):
     idx = _logical_key_to_idx(EVDEV_KEY_TO_LOGICAL.get(code))
     if idx is not None:
         return idx
-    return int(_hash01(code * 7.919) * TOTAL_LED_SLOTS)  # незнакомая клавиша — старое поведение
+    return None  # незнакомая клавиша (громкость и т.п.) — не светим наугад
 
 
 _TK_KEYSYM_TO_LOGICAL = {
-    "Escape": "esc", "Delete": "delete", "grave": "grave", "minus": "minus",
-    "equal": "equal", "BackSpace": "backspace", "Tab": "tab",
-    "bracketleft": "bracketleft", "bracketright": "bracketright", "backslash": "backslash",
-    "Caps_Lock": "capslock", "semicolon": "semicolon", "apostrophe": "apostrophe",
-    "Return": "enter", "KP_Enter": "enter",
-    "Shift_L": "shift_l", "Shift_R": "shift_r",
-    "comma": "comma", "period": "period", "slash": "slash",
-    "Up": "up", "Down": "down", "Left": "left", "Right": "right",
-    "Control_L": "ctrl_l", "Control_R": "ctrl_r",
-    "Alt_L": "alt_l", "Alt_R": "alt_r",
-    "Super_L": "meta_l", "Super_R": "meta_l",
+    "Escape": "esc",
+    "Delete": "delete",
+    "grave": "grave",
+    "minus": "minus",
+    "equal": "equal",
+    "BackSpace": "backspace",
+    "Tab": "tab",
+    "bracketleft": "bracketleft",
+    "bracketright": "bracketright",
+    "backslash": "backslash",
+    "Caps_Lock": "capslock",
+    "semicolon": "semicolon",
+    "apostrophe": "apostrophe",
+    "Return": "enter",
+    "KP_Enter": "enter",
+    "Shift_L": "shift_l",
+    "Shift_R": "shift_r",
+    "comma": "comma",
+    "period": "period",
+    "slash": "slash",
+    "Up": "up",
+    "Down": "down",
+    "Left": "left",
+    "Right": "right",
+    "Control_L": "ctrl_l",
+    "Control_R": "ctrl_r",
+    "Alt_L": "alt_l",
+    "Alt_R": "alt_r",
+    "Super_L": "meta_l",
+    "Super_R": "meta_l",
     "space": "space",
 }
 for _n in range(1, 13):
@@ -290,7 +546,7 @@ def _tk_event_to_idx(event):
     idx = _logical_key_to_idx(_TK_KEYSYM_TO_LOGICAL.get(event.keysym))
     if idx is not None:
         return idx
-    return int(_hash01(hash(event.keysym) * 7.919) * TOTAL_LED_SLOTS)  # неизвестная клавиша — старое поведение
+    return None  # неизвестная клавиша — не светим наугад
 
 
 def _scaled(rgb, factor):
@@ -306,8 +562,16 @@ def _hash01(n):
     return x - math.floor(x)
 
 
-def render_frame(effect_name, base_rgb, brightness_pct, t,
-                  direction=1, axis="h", speed=1.0, touches=None):
+def render_frame(
+    effect_name,
+    base_rgb,
+    brightness_pct,
+    t,
+    direction=1,
+    axis="h",
+    speed=1.0,
+    touches=None,
+):
     cfg = EFFECTS[effect_name]
     factor = brightness_pct / 100.0
     kind = cfg["kind"]
@@ -418,7 +682,7 @@ def render_frame(effect_name, base_rgb, brightness_pct, t,
         out = []
         for i in range(n):
             h = _hash01(i * 97.13 + bucket * 131.7)
-            level = h ** 3
+            level = h**3
             out.append(_scaled(base_rgb, factor * level))
         return out
 
@@ -433,22 +697,37 @@ def render_frame(effect_name, base_rgb, brightness_pct, t,
         # оказался в общем массиве, круг теперь считается ВНУТРИ СВОЕГО
         # РЯДА (по колонке нажатой клавиши), а не по всей ленте сразу —
         # так волна всегда симметрично расходится от точки нажатия.
+        # Круговая волна по ВСЕЙ клавиатуре: расстояние считается в 2D
+        # (колонка + ряд), а не только внутри одного ряда. Вспышка в точке
+        # нажатия + расходящееся кольцо с мягким шлейфом позади.
+        # Свет разливается от нажатой клавиши во все стороны одним цветом;
+        # чем дальше от точки нажатия, тем тусклее. Расстояния — в реальных
+        # координатах клавиш (после калибровки), а не в номерах светодиодов.
         out = [(0, 0, 0)] * n
-        for origin, t_press in (touches or ()):
+        for origin, t_press in touches or ():
             age = t - t_press
             if age < 0 or age > REACTIVE_LIFETIME:
                 continue
+            o_xy = LED_XY[origin]
+            if o_xy is None:
+                continue
             radius = age * REACTIVE_SPEED * s
-            fade = max(0.0, 1.0 - age / REACTIVE_LIFETIME)
-            origin_row = ROW_OF[origin]
-            origin_col = COL_OF[origin]
-            for i in ROW_INDEX_LIST[origin_row]:
-                dist = abs(COL_OF[i] - origin_col)
-                delta = abs(dist - radius)
-                if delta < REACTIVE_RING_W:
-                    level = (1.0 - delta / REACTIVE_RING_W) * fade
-                    candidate = _scaled(base_rgb, factor * level)
-                    out[i] = tuple(max(a, b) for a, b in zip(out[i], candidate))
+            fade = (1.0 - age / REACTIVE_LIFETIME) ** 1.2
+            for i in range(n):
+                xy = LED_XY[i]
+                if xy is None:
+                    continue
+                dist = math.hypot(xy[0] - o_xy[0], xy[1] - o_xy[1])
+                if dist > radius + REACTIVE_EDGE:
+                    continue
+                level = max(0.0, 1.0 - dist / REACTIVE_REACH) ** 1.3
+                if dist > radius:  # мягкий передний край волны
+                    level *= 1.0 - (dist - radius) / REACTIVE_EDGE
+                level *= fade
+                if level <= 0.0:
+                    continue
+                candidate = _scaled(base_rgb, factor * level)
+                out[i] = tuple(max(a, b) for a, b in zip(out[i], candidate))
         return out
 
     return [(0, 0, 0)] * n
@@ -504,14 +783,16 @@ class ReactiveListener(threading.Thread):
         except Exception as e:
             print(f"[РЕАКЦИЯ] Не удалось перечислить /dev/input: {e}")
 
-        if exact:
-            for d in keyboard_like:
-                try:
-                    d.close()
-                except Exception:
-                    pass
-            print(f"[РЕАКЦИЯ] Найдено устройство по VID/PID: {[d.path for d in exact]}")
-            return exact
+        if exact or keyboard_like:
+            # Слушаем ВСЕ клавиатуры, а не только устройства с VID/PID
+            # интерфейса подсветки: реальные нажатия могут приходить
+            # с другого устройства (другой интерфейс/режим подключения).
+            found = exact + keyboard_like
+            print(
+                "[РЕАКЦИЯ] Слушаю устройства: "
+                + ", ".join(f"{d.path} ({d.name})" for d in found)
+            )
+            return found
 
         if keyboard_like:
             print(
@@ -527,7 +808,9 @@ class ReactiveListener(threading.Thread):
                 "Исправление: sudo usermod -aG input $USER, затем перелогиниться "
                 "(или перезагрузиться), после чего снова выбрать этот режим."
             )
-        print("[РЕАКЦИЯ] Ни одной клавиатуры для чтения не найдено. Видимые устройства:")
+        print(
+            "[РЕАКЦИЯ] Ни одной клавиатуры для чтения не найдено. Видимые устройства:"
+        )
         for path, name, vid, pid in all_seen:
             print(f"    {path}: {name!r} VID={vid:#06x} PID={pid:#06x}")
         return []
@@ -539,7 +822,8 @@ class ReactiveListener(threading.Thread):
                 "[РЕАКЦИЯ] Реальные нажатия недоступны (нет evdev, устройство не "
                 "найдено, или нет прав на /dev/input). Подсказка: "
                 "pip install evdev, sudo usermod -aG input $USER, затем "
-                "перелогиниться. Пока имитирую случайные касания."
+                "перелогиниться. Системные нажатия не читаются; реагирую "
+                "только на клавиши, пока окно программы в фокусе."
             )
             self._fallback_loop()
             return
@@ -560,7 +844,10 @@ class ReactiveListener(threading.Thread):
                 if event.type == ecodes.EV_KEY and event.value in (1, 2):
                     self.controller.add_touch(_evdev_code_to_idx(event.code))
                 elif event.type == ecodes.EV_REL and event.value != 0:
-                    idx = int(_hash01((event.code + 500) * 5.317 + int(time.time() * 5)) * TOTAL_LED_SLOTS)
+                    idx = int(
+                        _hash01((event.code + 500) * 5.317 + int(time.time() * 5))
+                        * TOTAL_LED_SLOTS
+                    )
                     self.controller.add_touch(idx)
         except PermissionError:
             if not self._stop_evt.is_set():
@@ -573,10 +860,10 @@ class ReactiveListener(threading.Thread):
                 print(f"[РЕАКЦИЯ] Поток {device.path} прерван: {e}")
 
     def _fallback_loop(self):
+        # Раньше здесь рисовались случайные вспышки — это путало (казалось,
+        # что эффект "работает", но не от нажатий). Теперь просто ждём.
         while not self._stop_evt.is_set():
-            idx = int(time.time() * 977) % TOTAL_LED_SLOTS
-            self.controller.add_touch(idx)
-            time.sleep(1.4)
+            time.sleep(0.5)
 
     def stop(self):
         self._stop_evt.set()
@@ -587,9 +874,53 @@ class ReactiveListener(threading.Thread):
                 pass
 
 
+class HidrawDevice:
+    """Отправка Feature-репорта через /dev/hidrawN.
+
+    В отличие от pyusb здесь НЕ нужно отсоединять ядерный драйвер от
+    интерфейса, поэтому остальные функции этого интерфейса (ролик
+    громкости, mute и т.п.) продолжают работать как обычно."""
+
+    def __init__(self, path):
+        self.path = path
+        self.fd = os.open(path, os.O_RDWR)
+
+    def send(self, payload):
+        # HIDIOCSFEATURE(len) = _IOC(_IOC_READ|_IOC_WRITE, 'H', 0x06, len)
+        req = (3 << 30) | (len(payload) << 16) | (ord("H") << 8) | 0x06
+        fcntl.ioctl(self.fd, req, bytes(payload))
+
+    def close(self):
+        try:
+            os.close(self.fd)
+        except OSError:
+            pass
+
+
+def _find_hidraw_path():
+    """Ищет /dev/hidrawN интерфейса USB_INTERFACE нашей клавиатуры."""
+    want = f"{VENDOR_ID:08X}:{PRODUCT_ID:08X}"  # HID_ID=0003:0000258A:0000010C
+    for node in sorted(glob.glob("/sys/class/hidraw/hidraw*")):
+        try:
+            dev_dir = os.path.realpath(os.path.join(node, "device"))
+            with open(os.path.join(dev_dir, "uevent"), "r") as f:
+                uevent = f.read().upper()
+            if want not in uevent:
+                continue
+            with open(os.path.join(dev_dir, "..", "bInterfaceNumber"), "r") as f:
+                if int(f.read().strip(), 16) != USB_INTERFACE:
+                    continue
+            return "/dev/" + os.path.basename(node)
+        except Exception:
+            continue
+    return None
+
+
 class LeobogController:
     def __init__(self, on_status_change=None):
         self.dev = None
+        self.solo_led = None
+        self._hidraw_failed = False
         self.current_rgb = (255, 0, 128)
         self.current_effect = DEFAULT_EFFECT
         self.brightness = 100
@@ -682,6 +1013,19 @@ class LeobogController:
         _save_state(state)
 
     def _try_connect(self):
+        if not self._hidraw_failed:
+            path = _find_hidraw_path()
+            if path:
+                try:
+                    dev = HidrawDevice(path)
+                    print(f"[USB] Подключено через {path} (драйвер не отсоединяется)")
+                    return dev
+                except OSError as e:
+                    print(
+                        f"[USB] Нет доступа к {path}: {e}. Падаю на pyusb — но тогда "
+                        "ролик громкости может не работать. Решение — udev-правило (см. README)."
+                    )
+                    self._hidraw_failed = True
         try:
             device = usb.core.find(idVendor=VENDOR_ID, idProduct=PRODUCT_ID)
             if device is None:
@@ -708,30 +1052,52 @@ class LeobogController:
         payload[6] = HEADER_B6
         payload[7] = HEADER_B7
 
-        colors = render_frame(
-            self.current_effect, self.current_rgb, self.brightness, t,
-            direction=self.direction, axis=self.axis, speed=self.speed,
-            touches=list(self.touches),
-        )
+        if self.solo_led is not None:
+            colors = [(0, 0, 0)] * TOTAL_LED_SLOTS
+            colors[self.solo_led] = (255, 255, 255)
+        else:
+            colors = render_frame(
+                self.current_effect,
+                self.current_rgb,
+                self.brightness,
+                t,
+                direction=self.direction,
+                axis=self.axis,
+                speed=self.speed,
+                touches=list(self.touches),
+            )
         for slot, (r, g, b) in enumerate(colors):
             idx = 8 + slot * 3
             if idx + 2 >= PAYLOAD_SIZE:
                 break
-            payload[idx]     = r
+            payload[idx] = r
             payload[idx + 1] = g
             payload[idx + 2] = b
         return payload
 
     def _send_locked(self, payload):
-        assert len(payload) == PAYLOAD_SIZE, \
+        assert len(payload) == PAYLOAD_SIZE, (
             f"[BUG] payload {len(payload)} != {PAYLOAD_SIZE}, отправка отменена"
+        )
         if self.dev is None:
             return False
+        if isinstance(self.dev, HidrawDevice):
+            try:
+                self.dev.send(payload)
+                return True
+            except OSError as e:
+                if e.errno in (_errno.ENODEV, _errno.EIO, _errno.EPIPE):
+                    print(f"[ERROR] hidraw отвалился (errno={e.errno}): {e}")
+                else:
+                    print(f"[ERROR] hidraw не принял отчёт ({e}); перехожу на pyusb")
+                    self._hidraw_failed = True
+                self._release_locked()
+                return False
         try:
             self.dev.ctrl_transfer(0x21, 0x09, 0x0306, 0x0001, payload)
             return True
         except usb.core.USBError as e:
-            errno = getattr(e, 'errno', None)
+            errno = getattr(e, "errno", None)
             if errno == -7 or errno is None:
                 return False
             print(f"[ERROR] Устройство отвалилось (errno={errno}): {e}")
@@ -744,11 +1110,19 @@ class LeobogController:
 
     def _release_locked(self):
         if self.dev is not None:
-            try:
-                usb.util.release_interface(self.dev, USB_INTERFACE)
-                usb.util.dispose_resources(self.dev)
-            except Exception:
-                pass
+            if isinstance(self.dev, HidrawDevice):
+                self.dev.close()
+            else:
+                try:
+                    usb.util.release_interface(self.dev, USB_INTERFACE)
+                    usb.util.dispose_resources(self.dev)
+                    try:
+                        # вернуть интерфейс ядру, чтобы ролик/mute снова работали
+                        self.dev.attach_kernel_driver(USB_INTERFACE)
+                    except Exception:
+                        pass
+                except Exception:
+                    pass
         self.dev = None
 
     def _worker_loop(self):
@@ -804,7 +1178,16 @@ class LeobogController:
             self._reactive_listener = None
         self.touches = []
 
+    def set_solo(self, idx):
+        """Для калибровки: зажечь только один светодиод (None — выключить режим)."""
+        with self._lock:
+            self.solo_led = idx
+            t = time.monotonic() - self._start_time
+            self._send_locked(self._build_payload(t))
+
     def add_touch(self, idx):
+        if idx is None:
+            return
         now = time.monotonic() - self._start_time
         with self._lock:
             self.touches.append((idx, now))
@@ -889,42 +1272,42 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
 PALETTE = {
-    "bg":        "#121214",
-    "panel":     "#19191d",
+    "bg": "#121214",
+    "panel": "#19191d",
     "panel_alt": "#232329",
-    "accent":    "#7c9eff",
+    "accent": "#7c9eff",
     "accent_hi": "#9db4ff",
-    "text":      "#eaeaf0",
-    "subtext":   "#8b8b95",
-    "dim":       "#4a4a52",
-    "ok":        "#5ddc97",
-    "err":       "#ff6b81",
+    "text": "#eaeaf0",
+    "subtext": "#8b8b95",
+    "dim": "#4a4a52",
+    "ok": "#5ddc97",
+    "err": "#ff6b81",
 }
 
 DIR_RIGHT = "Вправо ▶"
-DIR_LEFT  = "◀ Влево"
-DIR_DOWN  = "Вниз ▼"
-DIR_UP    = "▲ Вверх"
-AXIS_H    = "⟷ Горизонталь"
-AXIS_V    = "↕ Вертикаль"
+DIR_LEFT = "◀ Влево"
+DIR_DOWN = "Вниз ▼"
+DIR_UP = "▲ Вверх"
+AXIS_H = "⟷ Горизонталь"
+AXIS_V = "↕ Вертикаль"
 
 PRESET_COLORS = [
-    ("Красный",     (255, 0, 0)),
-    ("Алый",        (255, 45, 45)),
-    ("Оранжевый",   (255, 120, 0)),
-    ("Янтарный",    (255, 176, 0)),
-    ("Жёлтый",      (255, 230, 0)),
-    ("Лайм",        (150, 255, 0)),
-    ("Зелёный",     (0, 220, 60)),
-    ("Мятный",      (0, 255, 150)),
-    ("Бирюзовый",   (0, 230, 210)),
-    ("Голубой",     (0, 170, 255)),
-    ("Синий",       (30, 90, 255)),
-    ("Индиго",      (90, 60, 255)),
-    ("Фиолетовый",  (160, 30, 255)),
-    ("Пурпурный",   (220, 0, 220)),
-    ("Розовый",     (255, 0, 130)),
-    ("Белый",       (255, 255, 255)),
+    ("Красный", (255, 0, 0)),
+    ("Алый", (255, 45, 45)),
+    ("Оранжевый", (255, 120, 0)),
+    ("Янтарный", (255, 176, 0)),
+    ("Жёлтый", (255, 230, 0)),
+    ("Лайм", (150, 255, 0)),
+    ("Зелёный", (0, 220, 60)),
+    ("Мятный", (0, 255, 150)),
+    ("Бирюзовый", (0, 230, 210)),
+    ("Голубой", (0, 170, 255)),
+    ("Синий", (30, 90, 255)),
+    ("Индиго", (90, 60, 255)),
+    ("Фиолетовый", (160, 30, 255)),
+    ("Пурпурный", (220, 0, 220)),
+    ("Розовый", (255, 0, 130)),
+    ("Белый", (255, 255, 255)),
 ]
 
 
@@ -941,8 +1324,12 @@ class ColorWheel(ctk.CTkFrame):
         self._enabled = True
 
         self.canvas = tk.Canvas(
-            self, width=size, height=size,
-            highlightthickness=0, bg=PALETTE["panel"], bd=0
+            self,
+            width=size,
+            height=size,
+            highlightthickness=0,
+            bg=PALETTE["panel"],
+            bd=0,
         )
         self.canvas.pack()
 
@@ -996,19 +1383,27 @@ class ColorWheel(ctk.CTkFrame):
             alpha = int(38 * (1 - i / (glow_layers + 1)))
             draw.ellipse(
                 [cx - r - spread, cy - r - spread, cx + r + spread, cy + r + spread],
-                outline=(ar, ag, ab, alpha), width=int(scale * 1.4)
+                outline=(ar, ag, ab, alpha),
+                width=int(scale * 1.4),
             )
 
         # основное чёткое кольцо
         ring_w = max(2, int(scale * 1.6))
         draw.ellipse(
-            [cx - r - ring_w / 2, cy - r - ring_w / 2, cx + r + ring_w / 2, cy + r + ring_w / 2],
-            outline=(ar, ag, ab, 255), width=ring_w
+            [
+                cx - r - ring_w / 2,
+                cy - r - ring_w / 2,
+                cx + r + ring_w / 2,
+                cy + r + ring_w / 2,
+            ],
+            outline=(ar, ag, ab, 255),
+            width=ring_w,
         )
         # тонкая яркая внутренняя грань кольца для глубины
         draw.ellipse(
             [cx - r - 1, cy - r - 1, cx + r + 1, cy + r + 1],
-            outline=(255, 255, 255, 90), width=max(1, scale // 3)
+            outline=(255, 255, 255, 90),
+            width=max(1, scale // 3),
         )
 
         img = img.resize((size, size), Image.LANCZOS)
@@ -1094,7 +1489,9 @@ class PresetPalette(ctk.CTkFrame):
     внутренними отступами/рамкой темы и выглядит выцветшим. Здесь заливка
     круга — это ровно тот hex, что передан, без подмешивания темы."""
 
-    def __init__(self, master, colors, on_select=None, swatch=30, gap=10, cols=8, **kwargs):
+    def __init__(
+        self, master, colors, on_select=None, swatch=30, gap=10, cols=8, **kwargs
+    ):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.colors = colors
         self.on_select = on_select
@@ -1107,8 +1504,12 @@ class PresetPalette(ctk.CTkFrame):
         height = rows * (swatch + gap) - gap
 
         self.canvas = tk.Canvas(
-            self, width=width, height=height,
-            highlightthickness=0, bg=PALETTE["panel"], bd=0
+            self,
+            width=width,
+            height=height,
+            highlightthickness=0,
+            bg=PALETTE["panel"],
+            bd=0,
         )
         self.canvas.pack(anchor="w")
 
@@ -1123,7 +1524,9 @@ class PresetPalette(ctk.CTkFrame):
             oval = self.canvas.create_oval(
                 x0, y0, x1, y1, fill=hexc, outline=PALETTE["dim"], width=1
             )
-            self._items.append({"id": oval, "rgb": rgb, "name": name, "bbox": (x0, y0, x1, y1)})
+            self._items.append(
+                {"id": oval, "rgb": rgb, "name": name, "bbox": (x0, y0, x1, y1)}
+            )
 
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<Motion>", self._on_motion)
@@ -1162,7 +1565,9 @@ class PresetPalette(ctk.CTkFrame):
 
     def _select(self, item):
         if self._selected_id is not None:
-            self.canvas.itemconfigure(self._selected_id, outline=PALETTE["dim"], width=1)
+            self.canvas.itemconfigure(
+                self._selected_id, outline=PALETTE["dim"], width=1
+            )
         self.canvas.itemconfigure(item["id"], outline="#ffffff", width=2)
         self._selected_id = item["id"]
         if self.on_select:
@@ -1170,7 +1575,9 @@ class PresetPalette(ctk.CTkFrame):
 
     def clear_selection(self):
         if self._selected_id is not None:
-            self.canvas.itemconfigure(self._selected_id, outline=PALETTE["dim"], width=1)
+            self.canvas.itemconfigure(
+                self._selected_id, outline=PALETTE["dim"], width=1
+            )
             self._selected_id = None
 
 
@@ -1182,13 +1589,23 @@ class FullWidthDropdown(ctk.CTkFrame):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.values = list(values)
         self.command = command
-        self._current = initial if initial in self.values else (self.values[0] if self.values else "")
+        self._current = (
+            initial
+            if initial in self.values
+            else (self.values[0] if self.values else "")
+        )
         self._popup = None
 
         self.button = ctk.CTkButton(
-            self, text=self._current, command=self._toggle,
-            fg_color=PALETTE["panel_alt"], hover_color=PALETTE["panel_alt"],
-            text_color=PALETTE["text"], anchor="w", corner_radius=10, height=36,
+            self,
+            text=self._current,
+            command=self._toggle,
+            fg_color=PALETTE["panel_alt"],
+            hover_color=PALETTE["panel_alt"],
+            text_color=PALETTE["text"],
+            anchor="w",
+            corner_radius=10,
+            height=36,
         )
         self.button.pack(fill="x")
 
@@ -1225,8 +1642,11 @@ class FullWidthDropdown(ctk.CTkFrame):
             pass
 
         outer = ctk.CTkFrame(
-            self._popup, fg_color=PALETTE["panel_alt"], corner_radius=10,
-            border_width=1, border_color=PALETTE["accent"]
+            self._popup,
+            fg_color=PALETTE["panel_alt"],
+            corner_radius=10,
+            border_width=1,
+            border_color=PALETTE["accent"],
         )
         outer.pack(fill="both", expand=True, padx=1, pady=1)
 
@@ -1238,13 +1658,16 @@ class FullWidthDropdown(ctk.CTkFrame):
             list_area.pack(fill="both", expand=True, padx=3, pady=3)
 
         for val in self.values:
-            is_current = (val == self._current)
+            is_current = val == self._current
             b = ctk.CTkButton(
-                list_area, text=val, anchor="w",
+                list_area,
+                text=val,
+                anchor="w",
                 fg_color=PALETTE["accent"] if is_current else "transparent",
                 hover_color=PALETTE["accent_hi"],
                 text_color=("#14141a" if is_current else PALETTE["text"]),
-                corner_radius=8, height=32,
+                corner_radius=8,
+                height=32,
                 command=lambda v=val: self._select(v),
             )
             b.pack(fill="x", padx=2, pady=1)
@@ -1336,33 +1759,48 @@ class App(ctk.CTk):
         title_row = ctk.CTkFrame(header, fg_color="transparent")
         title_row.pack(side="left")
         self.title_icon = ctk.CTkLabel(
-            title_row, text="⌨", font=ctk.CTkFont(size=26),
-            text_color=PALETTE["accent"], width=34
+            title_row,
+            text="⌨",
+            font=ctk.CTkFont(size=26),
+            text_color=PALETTE["accent"],
+            width=34,
         )
         self.title_icon.pack(side="left", padx=(0, 10))
         title_box = ctk.CTkFrame(title_row, fg_color="transparent")
         title_box.pack(side="left")
         ctk.CTkLabel(
-            title_box, text="LEOBOG HI75C",
-            font=ctk.CTkFont(size=21, weight="bold"), text_color=PALETTE["text"]
+            title_box,
+            text="LEOBOG HI75C",
+            font=ctk.CTkFont(size=21, weight="bold"),
+            text_color=PALETTE["text"],
         ).pack(anchor="w")
         ctk.CTkLabel(
-            title_box, text="RGB Studio",
-            font=ctk.CTkFont(size=11), text_color=PALETTE["dim"]
+            title_box,
+            text="RGB Studio",
+            font=ctk.CTkFont(size=11),
+            text_color=PALETTE["dim"],
         ).pack(anchor="w")
 
         self.status_chip = ctk.CTkFrame(
-            header, fg_color=PALETTE["panel"], corner_radius=999,
-            border_width=1, border_color=PALETTE["err"]
+            header,
+            fg_color=PALETTE["panel"],
+            corner_radius=999,
+            border_width=1,
+            border_color=PALETTE["err"],
         )
         self.status_chip.pack(side="right", pady=(2, 0))
         self.status_dot = ctk.CTkLabel(
-            self.status_chip, text="●", font=ctk.CTkFont(size=12), text_color=PALETTE["err"]
+            self.status_chip,
+            text="●",
+            font=ctk.CTkFont(size=12),
+            text_color=PALETTE["err"],
         )
         self.status_dot.pack(side="left", padx=(14, 6), pady=7)
         self.status_lbl = ctk.CTkLabel(
-            self.status_chip, text="Офлайн", font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=PALETTE["subtext"]
+            self.status_chip,
+            text="Офлайн",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=PALETTE["subtext"],
         )
         self.status_lbl.pack(side="left", padx=(0, 14), pady=7)
 
@@ -1376,19 +1814,27 @@ class App(ctk.CTk):
         body.grid_rowconfigure(0, weight=1)
 
         left = ctk.CTkFrame(
-            body, corner_radius=18, fg_color=PALETTE["panel"],
-            border_width=1, border_color=PALETTE["panel_alt"]
+            body,
+            corner_radius=18,
+            fg_color=PALETTE["panel"],
+            border_width=1,
+            border_color=PALETTE["panel_alt"],
         )
         left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
         right = ctk.CTkFrame(
-            body, corner_radius=18, fg_color=PALETTE["panel"],
-            border_width=1, border_color=PALETTE["panel_alt"]
+            body,
+            corner_radius=18,
+            fg_color=PALETTE["panel"],
+            border_width=1,
+            border_color=PALETTE["panel_alt"],
         )
         right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
 
         self._label(left, "РЕЖИМ").pack(anchor="w", padx=18, pady=(18, 6))
         self.effect_menu = FullWidthDropdown(
-            left, values=list(EFFECTS.keys()), command=self._on_effect_change,
+            left,
+            values=list(EFFECTS.keys()),
+            command=self._on_effect_change,
             initial=self.controller.current_effect,
         )
         self.effect_menu.pack(fill="x", padx=18, pady=(0, 16))
@@ -1396,10 +1842,16 @@ class App(ctk.CTk):
         self.axis_title = self._label(left, "ОСЬ")
         self.axis_title.pack(anchor="w", padx=18, pady=(0, 6))
         self.axis_seg = ctk.CTkSegmentedButton(
-            left, values=[AXIS_H, AXIS_V], command=self._on_axis_change,
-            fg_color=PALETTE["panel_alt"], selected_color=PALETTE["accent"],
-            selected_hover_color=PALETTE["accent_hi"], unselected_color=PALETTE["panel_alt"],
-            text_color=PALETTE["text"], corner_radius=10, height=32,
+            left,
+            values=[AXIS_H, AXIS_V],
+            command=self._on_axis_change,
+            fg_color=PALETTE["panel_alt"],
+            selected_color=PALETTE["accent"],
+            selected_hover_color=PALETTE["accent_hi"],
+            unselected_color=PALETTE["panel_alt"],
+            text_color=PALETTE["text"],
+            corner_radius=10,
+            height=32,
         )
         # Ось/направление/скорость восстанавливаются из сохранённого
         # состояния (последний выбранный режим), а не сбрасываются на
@@ -1411,29 +1863,46 @@ class App(ctk.CTk):
 
         self.dir_title = self._label(left, "НАПРАВЛЕНИЕ")
         self.dir_title.pack(anchor="w", padx=18, pady=(0, 6))
-        init_dir_labels = (DIR_DOWN, DIR_UP) if init_axis == "v" else (DIR_RIGHT, DIR_LEFT)
-        self.direction_seg = ctk.CTkSegmentedButton(
-            left, values=list(init_dir_labels), command=self._on_direction_change,
-            fg_color=PALETTE["panel_alt"], selected_color=PALETTE["accent"],
-            selected_hover_color=PALETTE["accent_hi"], unselected_color=PALETTE["panel_alt"],
-            text_color=PALETTE["text"], corner_radius=10, height=32,
+        init_dir_labels = (
+            (DIR_DOWN, DIR_UP) if init_axis == "v" else (DIR_RIGHT, DIR_LEFT)
         )
-        self.direction_seg.set(init_dir_labels[0] if init_sign >= 0 else init_dir_labels[1])
+        self.direction_seg = ctk.CTkSegmentedButton(
+            left,
+            values=list(init_dir_labels),
+            command=self._on_direction_change,
+            fg_color=PALETTE["panel_alt"],
+            selected_color=PALETTE["accent"],
+            selected_hover_color=PALETTE["accent_hi"],
+            unselected_color=PALETTE["panel_alt"],
+            text_color=PALETTE["text"],
+            corner_radius=10,
+            height=32,
+        )
+        self.direction_seg.set(
+            init_dir_labels[0] if init_sign >= 0 else init_dir_labels[1]
+        )
         self.direction_seg.pack(fill="x", padx=18, pady=(0, 18))
 
         self._label(left, "ЯРКОСТЬ").pack(anchor="w", padx=18, pady=(0, 4))
         brow = ctk.CTkFrame(left, fg_color="transparent")
         brow.pack(fill="x", padx=18)
         self.brightness_slider = ctk.CTkSlider(
-            brow, from_=0, to=100, command=self._on_brightness_change,
-            progress_color=PALETTE["accent"], button_color=PALETTE["accent"],
+            brow,
+            from_=0,
+            to=100,
+            command=self._on_brightness_change,
+            progress_color=PALETTE["accent"],
+            button_color=PALETTE["accent"],
             button_hover_color=PALETTE["accent_hi"],
         )
         self.brightness_slider.set(self.controller.brightness)
         self.brightness_slider.pack(side="left", fill="x", expand=True)
         self.brightness_val_lbl = ctk.CTkLabel(
-            brow, text=f"{self.controller.brightness}%", width=42,
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=PALETTE["text"]
+            brow,
+            text=f"{self.controller.brightness}%",
+            width=42,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=PALETTE["text"],
         )
         self.brightness_val_lbl.pack(side="left", padx=(10, 0))
 
@@ -1441,16 +1910,23 @@ class App(ctk.CTk):
         srow = ctk.CTkFrame(left, fg_color="transparent")
         srow.pack(fill="x", padx=18, pady=(0, 18))
         self.speed_slider = ctk.CTkSlider(
-            srow, from_=25, to=400, command=self._on_speed_change,
-            progress_color=PALETTE["accent"], button_color=PALETTE["accent"],
+            srow,
+            from_=25,
+            to=400,
+            command=self._on_speed_change,
+            progress_color=PALETTE["accent"],
+            button_color=PALETTE["accent"],
             button_hover_color=PALETTE["accent_hi"],
         )
         init_speed_pct = max(25, min(400, round(self.controller.speed * 100)))
         self.speed_slider.set(init_speed_pct)
         self.speed_slider.pack(side="left", fill="x", expand=True)
         self.speed_val_lbl = ctk.CTkLabel(
-            srow, text=f"{init_speed_pct}%", width=42,
-            font=ctk.CTkFont(size=12, weight="bold"), text_color=PALETTE["text"]
+            srow,
+            text=f"{init_speed_pct}%",
+            width=42,
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=PALETTE["text"],
         )
         self.speed_val_lbl.pack(side="left", padx=(10, 0))
 
@@ -1461,7 +1937,9 @@ class App(ctk.CTk):
 
         wheel_col = ctk.CTkFrame(color_row, fg_color="transparent")
         wheel_col.pack(side="left")
-        self.color_wheel = ColorWheel(wheel_col, size=148, on_change=self._on_wheel_change)
+        self.color_wheel = ColorWheel(
+            wheel_col, size=148, on_change=self._on_wheel_change
+        )
         self.color_wheel.set_rgb(self.controller.current_rgb)
         self.color_wheel.pack()
 
@@ -1474,13 +1952,21 @@ class App(ctk.CTk):
             erow = ctk.CTkFrame(rgb_col, fg_color="transparent")
             erow.pack(fill="x", pady=4)
             ctk.CTkLabel(
-                erow, text=ch, width=16, font=ctk.CTkFont(size=12, weight="bold"),
-                text_color=PALETTE["subtext"]
+                erow,
+                text=ch,
+                width=16,
+                font=ctk.CTkFont(size=12, weight="bold"),
+                text_color=PALETTE["subtext"],
             ).pack(side="left")
             entry = ctk.CTkEntry(
-                erow, width=64, justify="center",
-                fg_color=PALETTE["panel_alt"], text_color=PALETTE["text"],
-                border_width=1, border_color=PALETTE["panel_alt"], corner_radius=8,
+                erow,
+                width=64,
+                justify="center",
+                fg_color=PALETTE["panel_alt"],
+                text_color=PALETTE["text"],
+                border_width=1,
+                border_color=PALETTE["panel_alt"],
+                corner_radius=8,
             )
             entry.insert(0, str(self.controller.current_rgb["RGB".index(ch)]))
             entry.bind("<Return>", self._on_rgb_entry_commit)
@@ -1491,57 +1977,90 @@ class App(ctk.CTk):
             self.rgb_entries[ch] = entry
 
         ctk.CTkButton(
-            rgb_col, text="Применить", command=self._on_rgb_entry_commit,
-            fg_color=PALETTE["accent"], hover_color=PALETTE["accent_hi"],
-            text_color="#14141a", corner_radius=8, height=30,
+            rgb_col,
+            text="Применить",
+            command=self._on_rgb_entry_commit,
+            fg_color=PALETTE["accent"],
+            hover_color=PALETTE["accent_hi"],
+            text_color="#14141a",
+            corner_radius=8,
+            height=30,
             font=ctk.CTkFont(size=12, weight="bold"),
         ).pack(fill="x", pady=(10, 0))
 
         hex_row = ctk.CTkFrame(right, fg_color="transparent")
         hex_row.pack(pady=(0, 10))
         self.hex_swatch = ctk.CTkFrame(
-            hex_row, width=18, height=18, corner_radius=5,
-            fg_color="#ffffff", border_width=1, border_color=PALETTE["dim"]
+            hex_row,
+            width=18,
+            height=18,
+            corner_radius=5,
+            fg_color="#ffffff",
+            border_width=1,
+            border_color=PALETTE["dim"],
         )
         self.hex_swatch.pack(side="left", padx=(0, 8))
         self.hex_swatch.pack_propagate(False)
         self.color_hex_lbl = ctk.CTkLabel(
-            hex_row, text="", font=ctk.CTkFont(size=13, weight="bold"),
-            text_color=PALETTE["subtext"]
+            hex_row,
+            text="",
+            font=ctk.CTkFont(size=13, weight="bold"),
+            text_color=PALETTE["subtext"],
         )
         self.color_hex_lbl.pack(side="left")
 
         self._label(right, "СТАНДАРТНЫЕ ЦВЕТА").pack(anchor="w", padx=18, pady=(0, 6))
         self.preset_palette = PresetPalette(
-            right, PRESET_COLORS, on_select=self._on_preset_click,
-            swatch=28, gap=8, cols=8,
+            right,
+            PRESET_COLORS,
+            on_select=self._on_preset_click,
+            swatch=28,
+            gap=8,
+            cols=8,
         )
         self.preset_palette.pack(padx=18, pady=(0, 12), anchor="w")
 
         self.tray_hint_lbl = ctk.CTkLabel(
-            right, text="", font=ctk.CTkFont(size=10), text_color=PALETTE["dim"],
-            wraplength=280, justify="left"
+            right,
+            text="",
+            font=ctk.CTkFont(size=10),
+            text_color=PALETTE["dim"],
+            wraplength=280,
+            justify="left",
         )
         self.tray_hint_lbl.pack(side="bottom", padx=18, pady=(0, 6))
 
         ctk.CTkLabel(
-            right, text="Все эффекты рендерятся на хосте",
-            font=ctk.CTkFont(size=10), text_color=PALETTE["dim"]
+            right,
+            text="Все эффекты рендерятся на хосте",
+            font=ctk.CTkFont(size=10),
+            text_color=PALETTE["dim"],
         ).pack(side="bottom", pady=(0, 4))
 
         btn_row = ctk.CTkFrame(self, fg_color="transparent")
         btn_row.pack(side="bottom", padx=24, pady=(0, 20), fill="x")
         ctk.CTkButton(
-            btn_row, text="🗕  Свернуть в трей", command=self.hide_window,
-            fg_color=PALETTE["panel_alt"], hover_color=PALETTE["dim"],
-            text_color=PALETTE["text"], corner_radius=12, height=40,
+            btn_row,
+            text="🗕  Свернуть в трей",
+            command=self.hide_window,
+            fg_color=PALETTE["panel_alt"],
+            hover_color=PALETTE["dim"],
+            text_color=PALETTE["text"],
+            corner_radius=12,
+            height=40,
             font=ctk.CTkFont(size=13, weight="bold"),
-            border_width=1, border_color=PALETTE["panel_alt"],
+            border_width=1,
+            border_color=PALETTE["panel_alt"],
         ).pack(side="left", expand=True, fill="x", padx=(0, 6))
         ctk.CTkButton(
-            btn_row, text="✕  Выход", command=self._quit,
-            fg_color=PALETTE["err"], hover_color="#e0687d",
-            text_color="#14141a", corner_radius=12, height=40,
+            btn_row,
+            text="✕  Выход",
+            command=self._quit,
+            fg_color=PALETTE["err"],
+            hover_color="#e0687d",
+            text_color="#14141a",
+            corner_radius=12,
+            height=40,
             font=ctk.CTkFont(size=13, weight="bold"),
         ).pack(side="left", expand=True, fill="x", padx=(6, 0))
 
@@ -1549,8 +2068,10 @@ class App(ctk.CTk):
 
     def _label(self, parent, text):
         return ctk.CTkLabel(
-            parent, text=text, font=ctk.CTkFont(size=10, weight="bold"),
-            text_color=PALETTE["subtext"]
+            parent,
+            text=text,
+            font=ctk.CTkFont(size=10, weight="bold"),
+            text_color=PALETTE["subtext"],
         )
 
     def _start_preview_loop(self):
@@ -1625,7 +2146,9 @@ class App(ctk.CTk):
             self.status_chip.configure(border_color=PALETTE["ok"])
         else:
             self.status_dot.configure(text_color=PALETTE["err"])
-            self.status_lbl.configure(text="Поиск устройства…", text_color=PALETTE["subtext"])
+            self.status_lbl.configure(
+                text="Поиск устройства…", text_color=PALETTE["subtext"]
+            )
             self.status_chip.configure(border_color=PALETTE["err"])
 
     def _on_effect_change(self, name):
@@ -1647,7 +2170,9 @@ class App(ctk.CTk):
             self.controller.set_color(final_rgb)
             self._update_color_preview()
 
-        self.color_wheel.animate_to_rgb(rgb, duration_ms=280, on_step=on_step, on_done=on_done)
+        self.color_wheel.animate_to_rgb(
+            rgb, duration_ms=280, on_step=on_step, on_done=on_done
+        )
 
     def _on_rgb_entry_commit(self, event=None):
         self._rgb_editing = False
@@ -1696,8 +2221,8 @@ class App(ctk.CTk):
         else:
             self.tray_hint_lbl.configure(
                 text="Иконка трея недоступна в этом окружении (нужен SNI-хост, "
-                     "например модуль трея в waybar). Кнопка «Свернуть» сворачивает "
-                     "окно на панель задач."
+                "например модуль трея в waybar). Кнопка «Свернуть» сворачивает "
+                "окно на панель задач."
             )
 
     def hide_window(self):
@@ -1804,26 +2329,190 @@ def _check_single_instance(quiet=False):
 def create_tray_image():
     image = Image.new("RGBA", (64, 64), (0, 0, 0, 0))
     dc = ImageDraw.Draw(image)
-    dc.rounded_rectangle([8, 8, 56, 56], radius=14, fill=(25, 25, 29, 255),
-                          outline=(124, 158, 255, 255), width=3)
+    dc.rounded_rectangle(
+        [8, 8, 56, 56],
+        radius=14,
+        fill=(25, 25, 29, 255),
+        outline=(124, 158, 255, 255),
+        width=3,
+    )
     dc.ellipse([22, 22, 42, 42], fill=(124, 158, 255, 255))
     return image
+
+
+def run_calibration():
+    """Определяет, какой светодиод под какой клавишей.
+
+    Программа по очереди зажигает ОДИН светодиод (белым). Нужно нажать
+    клавишу, под которой он горит. Если под светодиодом клавиши нет или он
+    не виден — просто подожди, программа сама пойдёт дальше."""
+    import queue
+
+    if not EVDEV_AVAILABLE:
+        print("Нужен evdev (pip install evdev).")
+        return 1
+    pid = _read_lock_pid()
+    if _pid_alive(pid):
+        print(f"Сначала закрой программу (PID {pid}) — кнопка «Выход» в окне/трее.")
+        return 1
+
+    finder = ReactiveListener(None)
+    devices = finder._find_devices()
+    if not devices:
+        print(
+            "Не удалось прочитать клавиатуру. Нужна группа input:\n"
+            "  sudo usermod -aG input $USER   (потом перелогиниться)"
+        )
+        return 1
+
+    ctrl = LeobogController()
+    print("Жду подключения клавиатуры…")
+    for _ in range(50):
+        if ctrl.is_connected():
+            break
+        time.sleep(0.2)
+    if not ctrl.is_connected():
+        print("Клавиатура не подключена.")
+        ctrl.shutdown()
+        return 1
+
+    import select
+
+    def poll_key(timeout):
+        """Ждёт нажатия до timeout секунд, возвращает код клавиши или None.
+        Читает прямо здесь (без фоновых потоков), ошибки не глотает."""
+        deadline = time.monotonic() + timeout
+        while True:
+            left = max(0.0, deadline - time.monotonic())
+            try:
+                ready, _, _ = select.select(devices, [], [], left)
+            except (OSError, ValueError) as e:
+                print(f"\n[КАЛИБРОВКА] select не удался: {e}")
+                return None
+            found = None
+            for d in ready:
+                try:
+                    for ev in d.read():
+                        if ev.type == ecodes.EV_KEY and ev.value == 1 and found is None:
+                            found = ev.code
+                except BlockingIOError:
+                    pass
+                except OSError as e:
+                    print(f"\n[КАЛИБРОВКА] Ошибка чтения {d.path}: {e}")
+                    devices.remove(d)
+            if found is not None:
+                return found
+            if left <= 0.0 or not devices:
+                return None
+
+    wait_s = 1.6
+    mapping = {}
+    print(
+        f"\nКалибровка: горит один светодиод — нажми клавишу над ним (ждём {wait_s} с)."
+    )
+    print("Пустые/невидимые светодиоды пропускаются сами. Ctrl+C — отмена.\n")
+    try:
+        for idx in range(TOTAL_LED_SLOTS):
+            while poll_key(0.0) is not None:  # сбросить накопившиеся нажатия
+                pass
+            ctrl.set_solo(idx)
+            print(f"\rСветодиод {idx + 1}/{TOTAL_LED_SLOTS}   ", end="", flush=True)
+            code = poll_key(wait_s)
+            if code is None:
+                continue
+            logical = EVDEV_KEY_TO_LOGICAL.get(code)
+            if logical is None:
+                print(f"\n  клавиша с кодом {code} не поддерживается — пропуск")
+                continue
+            mapping[logical] = idx
+            print(f"\n  светодиод {idx} = {logical}")
+            time.sleep(0.25)
+    except KeyboardInterrupt:
+        print("\nОтменено, карта не сохранена.")
+        ctrl.set_solo(None)
+        ctrl.shutdown()
+        return 1
+
+    ctrl.set_solo(None)
+    ctrl.shutdown()
+    if not mapping:
+        print("\nНи одна клавиша не нажата — карта не сохранена.")
+        return 1
+    os.makedirs(STATE_DIR, exist_ok=True)
+    with open(KEYMAP_PATH, "w", encoding="utf-8") as f:
+        json.dump(mapping, f, indent=1)
+    missing = [k for k in KEY_XY if k not in mapping]
+    print(f"\nГотово: сопоставлено клавиш — {len(mapping)}, файл {KEYMAP_PATH}")
+    if missing:
+        print("Не сопоставлены (на них эффект не сработает):", ", ".join(missing))
+    return 0
+
+
+def run_keytest():
+    """Показывает, с каких устройств реально приходят нажатия."""
+    import select
+
+    if not EVDEV_AVAILABLE:
+        print("Нужен evdev.")
+        return 1
+    devices = ReactiveListener(None)._find_devices()
+    if not devices:
+        print(
+            "Нет доступных устройств. Нужна группа input: "
+            "sudo usermod -aG input $USER и перелогиниться."
+        )
+        return 1
+    print("\nЖми клавиши (Ctrl+C — выход). Показываю устройство и код.\n")
+    try:
+        while True:
+            ready, _, _ = select.select(devices, [], [])
+            for d in ready:
+                try:
+                    for ev in d.read():
+                        if ev.type == ecodes.EV_KEY and ev.value == 1:
+                            print(
+                                f"{d.path} ({d.name}): код {ev.code} = "
+                                f"{EVDEV_KEY_TO_LOGICAL.get(ev.code, '?')}"
+                            )
+                except BlockingIOError:
+                    pass
+    except KeyboardInterrupt:
+        return 0
 
 
 def _parse_args():
     parser = argparse.ArgumentParser(description="LEOBOG HI75C Studio")
     parser.add_argument(
-        "--tray", "--autostart", "--minimized",
-        dest="start_in_tray", action="store_true",
+        "--keytest",
+        action="store_true",
+        help="Показать, с каких устройств приходят нажатия (диагностика).",
+    )
+    parser.add_argument(
+        "--calibrate",
+        action="store_true",
+        help="Определить, какой светодиод под какой клавишей (для эффекта "
+        "«Реакция на нажатие»).",
+    )
+    parser.add_argument(
+        "--tray",
+        "--autostart",
+        "--minimized",
+        dest="start_in_tray",
+        action="store_true",
         help="Запуститься сразу свёрнутым в трей, не открывая окно "
-             "настроек. Для автозапуска вместе с Hyprland/DE: "
-             "exec-once = /путь/до/папки/run.sh --tray",
+        "настроек. Для автозапуска вместе с Hyprland/DE: "
+        "exec-once = /путь/до/папки/run.sh --tray",
     )
     return parser.parse_args()
 
 
 def main():
     args = _parse_args()
+
+    if args.keytest:
+        sys.exit(run_keytest())
+    if args.calibrate:
+        sys.exit(run_calibration())
 
     _check_single_instance(quiet=args.start_in_tray)
     _write_lock()
