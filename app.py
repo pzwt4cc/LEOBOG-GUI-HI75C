@@ -158,7 +158,28 @@ EFFECTS = {
         "directional": False,
         "has_axis": False,
     },
+    "⭕ Кольцо от нажатия": {
+        "kind": "reactive_ring",
+        "uses_color": True,
+        "animated": True,
+        "directional": False,
+        "has_axis": False,
+    },
+    "↔️ Ряд в обе стороны": {
+        "kind": "reactive_row_both",
+        "uses_color": True,
+        "animated": True,
+        "directional": False,
+        "has_axis": False,
+    },
 }
+
+
+def _is_reactive_kind(kind):
+    """Режимы, которые зависят от нажатий клавиш."""
+    return kind.startswith("reactive")
+
+
 DEFAULT_EFFECT = "🎨 Сплошной цвет"
 
 # --- Сохранение последнего выбранного режима/цвета между запусками ---
@@ -196,21 +217,25 @@ BREATH_SPEED = 1.4
 RAINBOW_SPEED = 0.12
 COLORCYCLE_SPEED = 0.10
 WAVE_SPEED = 0.55
-SNAKE_SPEED = 55.0
-SNAKE_LEN = 18
+SNAKE_SPEED = 32.0  # клавиш в секунду
+SNAKE_LEN = 12
 SNAKE_V_SPEED = 2.4
 SNAKE_V_TRAIL = 3
-COMET_SPEED = 70.0
-COMET_LEN = 30
-COMET_V_SPEED = 3.0
-COMET_V_TRAIL = 4
+COMET_SPEED = 13.0  # колонок в секунду
+COMET_LEN = 7
+COMET_V_SPEED = 5.0
+COMET_V_TRAIL = 3
 RIPPLE_SPEED = 0.9
-RIPPLE_SPREAD = 3.2
+RIPPLE_SPREAD = 1.6
 TWINKLE_HZ = 6.0
 REACTIVE_SPEED = 48.0  # колонок в секунду — быстро, "пронеслось"
 REACTIVE_LIFETIME = 0.65
 REACTIVE_REACH = 12.0  # на каком расстоянии свет гаснет совсем
 REACTIVE_EDGE = 1.5  # мягкость переднего края
+RING_SPEED = 26.0  # колонок в секунду
+RING_WIDTH = 1.7  # толщина кольца (чем меньше — тем тоньше)
+RING_LIFETIME = 1.5  # верхний предел; кольцо гаснет само, дойдя до края
+REACTIVE_ROW_REACH = 16.0  # для режимов "по ряду": почти на весь ряд
 
 GRID_ROWS = 6
 GRID_COLS = math.ceil(TOTAL_LED_SLOTS / GRID_ROWS)
@@ -225,17 +250,6 @@ COL_OF = [i - ROW_OF[i] * GRID_COLS for i in range(TOTAL_LED_SLOTS)]
 ROW_INDEX_LIST = [
     [i for i in range(TOTAL_LED_SLOTS) if ROW_OF[i] == r] for r in range(GRID_ROWS)
 ]
-
-POS_H = [i / TOTAL_LED_SLOTS for i in range(TOTAL_LED_SLOTS)]
-POS_V = [ROW_OF[i] / GRID_ROWS for i in range(TOTAL_LED_SLOTS)]
-
-_CENTER_H = (TOTAL_LED_SLOTS - 1) / 2
-_SPAN_H = max(1.0, _CENTER_H)
-DIST_H = [abs(i - _CENTER_H) / _SPAN_H for i in range(TOTAL_LED_SLOTS)]
-
-_CENTER_V = (GRID_ROWS - 1) / 2
-_SPAN_V = max(1.0, _CENTER_V)
-DIST_V = [abs(ROW_OF[i] - _CENTER_V) / _SPAN_V for i in range(TOTAL_LED_SLOTS)]
 
 
 # --- Реальное позиционирование клавиш для эффекта "Реакция на нажатие" ---
@@ -339,63 +353,216 @@ for _row_i, _row_keys in enumerate(KEY_ROWS):
         KEY_GRID_POS[_key] = (_row_i, _col_i / max(1, _width - 1))
 
 
-# Физические координаты клавиш (в единицах ширины обычной клавиши) для
-# типичной 75%-раскладки: ширины клавиш в каждом ряду, суммарно ~15.
-_KEY_WIDTHS = [
-    [15 / 14.0] * 14,
-    [1] * 13 + [2],
-    [1.5] + [1] * 12 + [1.5],
-    [1.75] + [1] * 11 + [2.25],
-    [2.25] + [1] * 10 + [1.75, 1],
-    [1.25, 1.25, 1.25, 6.25, 1, 1, 1, 1, 1],
-]
-KEY_XY = {}
-for _ri, (_keys, _ws) in enumerate(zip(KEY_ROWS, _KEY_WIDTHS)):
-    _x = 0.0
-    for _k, _w in zip(_keys, _ws):
-        KEY_XY[_k] = (_x + _w / 2.0, float(_ri))
-        _x += _w
+# --- Карта клавиш LEOBOG HI75C (встроена в программу) ---
+# Светодиоды идут по колонкам: номер = колонка * LED_ROWS + ряд
+# (ряд 0 — F-ряд, ряд 5 — нижний). Карта снята с реальной клавиатуры
+# калибровкой и подходит всем, у кого такая же модель — калибровать
+# ничего не нужно. Если у кого-то раскладка другая: ./run.sh --calibrate
+# сохранит свою карту в ~/.config/leobog-hi75c-studio/keymap.json, и она
+# заменит встроенную.
+LED_ROWS = 6
+DEFAULT_KEYMAP = {
+    "esc": 0,
+    "grave": 1,
+    "tab": 2,
+    "capslock": 3,
+    "shift_l": 4,
+    "ctrl_l": 5,
+    "1": 7,
+    "q": 8,
+    "a": 9,
+    "z": 10,
+    "meta_l": 11,
+    "f1": 12,
+    "2": 13,
+    "w": 14,
+    "s": 15,
+    "x": 16,
+    "alt_l": 17,
+    "f2": 18,
+    "3": 19,
+    "e": 20,
+    "d": 21,
+    "c": 22,
+    "f3": 24,
+    "4": 25,
+    "r": 26,
+    "f": 27,
+    "v": 28,
+    "f4": 30,
+    "5": 31,
+    "t": 32,
+    "g": 33,
+    "b": 34,
+    "space": 35,
+    "f5": 36,
+    "6": 37,
+    "y": 38,
+    "h": 39,
+    "n": 40,
+    "f6": 42,
+    "7": 43,
+    "u": 44,
+    "j": 45,
+    "m": 46,
+    "f7": 48,
+    "8": 49,
+    "i": 50,
+    "k": 51,
+    "comma": 52,
+    "alt_r": 53,
+    "f8": 54,
+    "9": 55,
+    "o": 56,
+    "l": 57,
+    "period": 58,
+    "f9": 60,
+    "0": 61,
+    "p": 62,
+    "semicolon": 63,
+    "slash": 64,
+    "ctrl_r": 65,
+    "f10": 66,
+    "minus": 67,
+    "bracketleft": 68,
+    "apostrophe": 69,
+    "shift_r": 70,
+    "f11": 72,
+    "equal": 73,
+    "bracketright": 74,
+    "left": 77,
+    "f12": 78,
+    "backspace": 79,
+    "backslash": 80,
+    "enter": 81,
+    "up": 82,
+    "down": 83,
+    "delete": 85,
+    "end": 86,
+    "pageup": 87,
+    "pagedown": 88,
+    "right": 89,
+}
 
-# Карта "клавиша -> номер светодиода", которую создаёт калибровка
-# (запуск: ./run.sh --calibrate). Без неё порядок светодиодов неизвестен.
+# Для рисования клавиатуры в окне: подписи и "растянутые" клавиши
+# (колонки от..до включительно). Остальные клавиши занимают одну колонку.
+KEY_SPANS = {"enter": (12, 13), "shift_r": (11, 12), "space": (3, 7)}
+KEY_LABELS = {
+    "esc": "Esc",
+    "grave": "`",
+    "tab": "Tab",
+    "capslock": "Caps",
+    "shift_l": "Shift",
+    "shift_r": "Shift",
+    "ctrl_l": "Ctrl",
+    "ctrl_r": "Ctrl",
+    "meta_l": "Win",
+    "alt_l": "Alt",
+    "alt_r": "Alt",
+    "space": "",
+    "minus": "-",
+    "equal": "=",
+    "bracketleft": "[",
+    "bracketright": "]",
+    "backslash": "\\",
+    "semicolon": ";",
+    "apostrophe": "'",
+    "comma": ",",
+    "period": ".",
+    "slash": "/",
+    "backspace": "⌫",
+    "enter": "Enter",
+    "delete": "Del",
+    "end": "End",
+    "pageup": "PgUp",
+    "pagedown": "PgDn",
+    "up": "▲",
+    "down": "▼",
+    "left": "◀",
+    "right": "▶",
+}
+
 KEYMAP_PATH = os.path.join(STATE_DIR, "keymap.json")
 
 
 def _load_keymap():
+    km = dict(DEFAULT_KEYMAP)
     try:
         with open(KEYMAP_PATH, "r", encoding="utf-8") as f:
             data = json.load(f)
-        km = {k: int(v) for k, v in data.items() if 0 <= int(v) < TOTAL_LED_SLOTS}
-        # Светодиоды идут по колонкам (6 на колонку): тильда стоит сразу
-        # под esc. Калибровка её нередко пропускает — достраиваем сами.
-        if "grave" not in km and "esc" in km and (km["esc"] + 1) not in km.values():
-            km["grave"] = km["esc"] + 1
-        # Колонка справа: Del, End, PgUp, PgDn идут подряд сверху вниз.
-        if "delete" in km:
-            for off, name in ((1, "end"), (2, "pageup"), (3, "pagedown")):
-                if name not in km and (km["delete"] + off) not in km.values():
-                    km[name] = km["delete"] + off
-        return km
+        for k, v in data.items():
+            if isinstance(k, str) and 0 <= int(v) < TOTAL_LED_SLOTS:
+                km[k] = int(v)
     except Exception:
-        return {}
+        pass
+    return km
 
 
 KEYMAP = _load_keymap()
 
-# Координаты каждого светодиода. С калибровкой — реальные (по клавишам),
-# без неё — грубое приближение по сетке.
+# Координаты каждого светодиода — прямо из матрицы (колонка, ряд).
+# Лишние светодиоды правее последней колонки с клавишами не используются.
 LED_XY = [None] * TOTAL_LED_SLOTS
-if KEYMAP:
-    # Калибровка показала: светодиоды идут по колонкам, 6 штук в колонке
-    # (номер = колонка * 6 + ряд). Координаты берём прямо из этой матрицы —
-    # так они точные и для клавиш, которых нет в калибровке.
-    _max_col = max(_i // 6 for _i in KEYMAP.values())
-    for _i in range(TOTAL_LED_SLOTS):
-        if _i // 6 <= _max_col:
-            LED_XY[_i] = (float(_i // 6), float(_i % 6))
-else:
-    for _i in range(TOTAL_LED_SLOTS):
-        LED_XY[_i] = (COL_OF[_i] / max(1, GRID_COLS - 1) * 15.0, float(ROW_OF[_i]))
+_max_col = max(_i // LED_ROWS for _i in KEYMAP.values())
+for _i in range(TOTAL_LED_SLOTS):
+    if _i // LED_ROWS <= _max_col:
+        LED_XY[_i] = (float(_i // LED_ROWS), float(_i % LED_ROWS))
+
+# --- Геометрия для позиционных эффектов (по реальным клавишам) ---
+KEY_LEDS = sorted(set(KEYMAP.values()))  # светодиоды, под которыми есть клавиши
+KEY_LED_SET = set(KEY_LEDS)
+N_COLS = _max_col + 1
+_CX = (N_COLS - 1) / 2.0
+_CY = (LED_ROWS - 1) / 2.0
+# положение 0..1 вдоль горизонтали / вертикали
+POS_H = [
+    LED_XY[i][0] / (N_COLS - 1) if LED_XY[i] else 0.0 for i in range(TOTAL_LED_SLOTS)
+]
+POS_V = [
+    LED_XY[i][1] / (LED_ROWS - 1) if LED_XY[i] else 0.0 for i in range(TOTAL_LED_SLOTS)
+]
+# расстояние до центра клавиатуры по горизонтали / вертикали, 0..1
+DIST_H = [
+    abs(LED_XY[i][0] - _CX) / _CX if LED_XY[i] else 0.0 for i in range(TOTAL_LED_SLOTS)
+]
+DIST_V = [
+    abs(LED_XY[i][1] - _CY) / _CY if LED_XY[i] else 0.0 for i in range(TOTAL_LED_SLOTS)
+]
+
+
+def _zigzag(by_rows):
+    """Путь "змейкой" по клавишам: ряд за рядом (туда-обратно) или колонка за колонкой."""
+    path = []
+    if by_rows:
+        for r in range(LED_ROWS):
+            row = sorted(
+                (i for i in KEY_LEDS if i % LED_ROWS == r), key=lambda i: i // LED_ROWS
+            )
+            path += row if r % 2 == 0 else row[::-1]
+    else:
+        for c in range(N_COLS):
+            col = sorted(
+                (i for i in KEY_LEDS if i // LED_ROWS == c), key=lambda i: i % LED_ROWS
+            )
+            path += col if c % 2 == 0 else col[::-1]
+    return path
+
+
+PATH_H = _zigzag(True)  # змейка идёт вдоль рядов
+PATH_V = _zigzag(False)  # змейка идёт вдоль колонок
+
+
+_FAR_CACHE = {}
+
+
+def _far_dist(origin):
+    """Расстояние от светодиода до самого дальнего светодиода клавиатуры."""
+    d = _FAR_CACHE.get(origin)
+    if d is None:
+        ox, oy = LED_XY[origin]
+        d = max(math.hypot(xy[0] - ox, xy[1] - oy) for xy in LED_XY if xy is not None)
+        _FAR_CACHE[origin] = d
+    return d
 
 
 def _logical_key_to_idx(logical):
@@ -589,11 +756,11 @@ def render_frame(
 
     if kind == "rainbow":
         positions = POS_V if vertical else POS_H
-        out = []
-        for i in range(n):
+        out = [(0, 0, 0)] * n
+        for i in KEY_LEDS:
             hue = (positions[i] + t * RAINBOW_SPEED * d * s) % 1.0
             r, g, b = colorsys.hsv_to_rgb(hue, 1.0, factor)
-            out.append((int(r * 255), int(g * 255), int(b * 255)))
+            out[i] = (int(r * 255), int(g * 255), int(b * 255))
         return out
 
     if kind == "colorcycle":
@@ -603,106 +770,115 @@ def render_frame(
 
     if kind == "wave":
         positions = POS_V if vertical else POS_H
-        out = []
-        for i in range(n):
+        out = [(0, 0, 0)] * n
+        for i in KEY_LEDS:
             phase = positions[i] - t * WAVE_SPEED * d * s
             level = (math.sin(2 * math.pi * phase) + 1) / 2
-            out.append(_scaled(base_rgb, factor * level))
+            out[i] = _scaled(base_rgb, factor * level)
         return out
 
     if kind == "snake":
         out = [(0, 0, 0)] * n
-        if vertical:
-            head = (t * SNAKE_V_SPEED * d * s) % GRID_ROWS
-            for offset in range(SNAKE_V_TRAIL):
-                row = int(head - offset * d) % GRID_ROWS
-                level = max(0.0, 1.0 - offset / SNAKE_V_TRAIL)
-                px = _scaled(base_rgb, factor * level)
-                for idx in ROW_INDEX_LIST[row]:
-                    out[idx] = px
-        else:
-            head = (t * SNAKE_SPEED * d * s) % n
-            for offset in range(SNAKE_LEN):
-                pos = int(head - offset * d) % n
-                level = max(0.0, 1.0 - offset / SNAKE_LEN)
-                out[pos] = _scaled(base_rgb, factor * level)
+        path = PATH_V if vertical else PATH_H
+        m = len(path)
+        head = (t * SNAKE_SPEED * d * s) % m
+        for offset in range(SNAKE_LEN):
+            pos = int(head - offset * d) % m
+            level = max(0.0, 1.0 - offset / SNAKE_LEN)
+            out[path[pos]] = _scaled(base_rgb, factor * level)
         return out
 
     if kind == "dual_snake":
         out = [(0, 0, 0)] * n
-        head_h = (t * SNAKE_SPEED * d * s) % n
-        for offset in range(SNAKE_LEN):
-            pos = int(head_h - offset * d) % n
-            level = max(0.0, 1.0 - offset / SNAKE_LEN)
-            candidate = _scaled(base_rgb, factor * level)
-            out[pos] = tuple(max(a, b) for a, b in zip(out[pos], candidate))
-        head_v = (t * SNAKE_V_SPEED * d * s) % GRID_ROWS
-        for offset in range(SNAKE_V_TRAIL):
-            row = int(head_v - offset * d) % GRID_ROWS
-            level = max(0.0, 1.0 - offset / SNAKE_V_TRAIL)
-            candidate = _scaled(base_rgb, factor * level)
-            for idx in ROW_INDEX_LIST[row]:
+        for path, phase in ((PATH_H, 0.0), (PATH_V, 0.5)):
+            m = len(path)
+            head = (t * SNAKE_SPEED * d * s + phase * m) % m
+            for offset in range(SNAKE_LEN):
+                pos = int(head - offset * d) % m
+                level = max(0.0, 1.0 - offset / SNAKE_LEN)
+                candidate = _scaled(base_rgb, factor * level)
+                idx = path[pos]
                 out[idx] = tuple(max(a, b) for a, b in zip(out[idx], candidate))
         return out
 
     if kind == "comet":
+        # Светящийся фронт с хвостом пролетает через всю клавиатуру
+        # (слева направо или сверху вниз) и полностью уходит за край.
         out = [(0, 0, 0)] * n
         glow = _mix(base_rgb, (255, 255, 255), 0.55)
         if vertical:
-            head = (t * COMET_V_SPEED * d * s) % GRID_ROWS
-            for offset in range(COMET_V_TRAIL):
-                row = int(head - offset * d) % GRID_ROWS
-                level = max(0.0, (1.0 - offset / COMET_V_TRAIL) ** 1.6)
-                src = glow if offset == 0 else base_rgb
-                px = _scaled(src, factor * level)
-                for idx in ROW_INDEX_LIST[row]:
-                    out[idx] = px
+            span, speed, trail = LED_ROWS - 1, COMET_V_SPEED, COMET_V_TRAIL
         else:
-            head = (t * COMET_SPEED * d * s) % n
-            for offset in range(COMET_LEN):
-                pos = int(head - offset * d) % n
-                level = max(0.0, (1.0 - offset / COMET_LEN) ** 1.6)
-                src = glow if offset == 0 else base_rgb
-                out[pos] = _scaled(src, factor * level)
+            span, speed, trail = N_COLS - 1, COMET_SPEED, COMET_LEN
+        head = (t * speed * s) % (span + trail + 1)
+        for i in KEY_LEDS:
+            u = LED_XY[i][1] if vertical else LED_XY[i][0]
+            if d < 0:
+                u = span - u
+            behind = head - u
+            if 0.0 <= behind < trail:
+                level = (1.0 - behind / trail) ** 1.6
+                src = glow if behind < 1.0 else base_rgb
+                out[i] = _scaled(src, factor * level)
         return out
 
     if kind == "ripple":
         dist_list = DIST_V if vertical else DIST_H
-        out = []
-        for i in range(n):
+        out = [(0, 0, 0)] * n
+        for i in KEY_LEDS:
             dist = dist_list[i]
             phase = dist * RIPPLE_SPREAD - t * RIPPLE_SPEED * d * s
             level = (math.sin(2 * math.pi * phase) + 1) / 2
             level *= max(0.0, 1.0 - dist * 0.25)
-            out.append(_scaled(base_rgb, factor * level))
+            out[i] = _scaled(base_rgb, factor * level)
         return out
 
     if kind == "twinkle":
         bucket = int(t * TWINKLE_HZ * s)
-        out = []
-        for i in range(n):
+        out = [(0, 0, 0)] * n
+        for i in KEY_LEDS:
             h = _hash01(i * 97.13 + bucket * 131.7)
-            level = h**3
-            out.append(_scaled(base_rgb, factor * level))
+            out[i] = _scaled(base_rgb, factor * h**3)
         return out
 
-    if kind == "reactive":
-        # Все 170 LED разбиты на 6 физических рядов последовательными
-        # блоками по ~29 штук (0-28, 29-57, 58-86...). Буквенные ряды
-        # оказываются во второй половине этого общего диапазона — вправо
-        # там почти некуда расширяться (упирается в конец массива), и
-        # видно было только движение влево. Цифровой ряд ближе к началу
-        # диапазона, поэтому там расширение в обе стороны было заметно
-        # и выглядело правильно. Чтобы не зависеть от того, где чей ряд
-        # оказался в общем массиве, круг теперь считается ВНУТРИ СВОЕГО
-        # РЯДА (по колонке нажатой клавиши), а не по всей ленте сразу —
-        # так волна всегда симметрично расходится от точки нажатия.
-        # Круговая волна по ВСЕЙ клавиатуре: расстояние считается в 2D
-        # (колонка + ряд), а не только внутри одного ряда. Вспышка в точке
-        # нажатия + расходящееся кольцо с мягким шлейфом позади.
-        # Свет разливается от нажатой клавиши во все стороны одним цветом;
-        # чем дальше от точки нажатия, тем тусклее. Расстояния — в реальных
-        # координатах клавиш (после калибровки), а не в номерах светодиодов.
+    if kind == "reactive_ring":
+        # Тонкое кольцо бежит от нажатой клавиши во все стороны. Позади
+        # кольца света нет: прошло — погасло. Яркость кольца слегка падает
+        # по мере удаления.
+        out = [(0, 0, 0)] * n
+        for origin, t_press in touches or ():
+            age = t - t_press
+            if age < 0 or age > RING_LIFETIME:
+                continue
+            o_xy = LED_XY[origin]
+            if o_xy is None:
+                continue
+            far = _far_dist(origin)
+            radius = age * RING_SPEED * s
+            if radius > far + RING_WIDTH:
+                continue  # кольцо уже дошло до самого дальнего края
+            fade = 1.0 - 0.45 * min(1.0, radius / max(far, 1.0))
+            for i in range(n):
+                xy = LED_XY[i]
+                if xy is None:
+                    continue
+                dist = math.hypot(xy[0] - o_xy[0], xy[1] - o_xy[1])
+                delta = abs(dist - radius)
+                if delta >= RING_WIDTH:
+                    continue
+                level = (1.0 - delta / RING_WIDTH) ** 0.8 * fade
+                candidate = _scaled(base_rgb, factor * level)
+                out[i] = tuple(max(a, b) for a, b in zip(out[i], candidate))
+        return out
+
+    if _is_reactive_kind(kind):
+        # Свет разливается от нажатой клавиши одним цветом, чем дальше —
+        # тем тусклее. Расстояния считаются по реальной матрице светодиодов
+        # (LED_XY), поэтому волна идёт ровно от нужной клавиши.
+        #   reactive          — круг во все стороны по всей клавиатуре
+        #   reactive_row_both — по ряду, и вправо, и влево
+        row_mode = kind == "reactive_row_both"
+        reach = REACTIVE_ROW_REACH if row_mode else REACTIVE_REACH
         out = [(0, 0, 0)] * n
         for origin, t_press in touches or ():
             age = t - t_press
@@ -717,10 +893,16 @@ def render_frame(
                 xy = LED_XY[i]
                 if xy is None:
                     continue
-                dist = math.hypot(xy[0] - o_xy[0], xy[1] - o_xy[1])
+                if row_mode:
+                    if xy[1] != o_xy[1]:
+                        continue
+                    dx = xy[0] - o_xy[0]
+                    dist = abs(dx)
+                else:
+                    dist = math.hypot(xy[0] - o_xy[0], xy[1] - o_xy[1])
                 if dist > radius + REACTIVE_EDGE:
                     continue
-                level = max(0.0, 1.0 - dist / REACTIVE_REACH) ** 1.3
+                level = max(0.0, 1.0 - dist / reach) ** 1.3
                 if dist > radius:  # мягкий передний край волны
                     level *= 1.0 - (dist - radius) / REACTIVE_EDGE
                 level *= fade
@@ -841,14 +1023,10 @@ class ReactiveListener(threading.Thread):
             for event in device.read_loop():
                 if self._stop_evt.is_set():
                     break
-                if event.type == ecodes.EV_KEY and event.value in (1, 2):
+                # Только само нажатие (value == 1): автоповтор при удержании
+                # (value == 2) и движения мыши не должны запускать эффект.
+                if event.type == ecodes.EV_KEY and event.value == 1:
                     self.controller.add_touch(_evdev_code_to_idx(event.code))
-                elif event.type == ecodes.EV_REL and event.value != 0:
-                    idx = int(
-                        _hash01((event.code + 500) * 5.317 + int(time.time() * 5))
-                        * TOTAL_LED_SLOTS
-                    )
-                    self.controller.add_touch(idx)
         except PermissionError:
             if not self._stop_evt.is_set():
                 print(
@@ -920,6 +1098,7 @@ class LeobogController:
     def __init__(self, on_status_change=None):
         self.dev = None
         self.solo_led = None
+        self.last_colors = [(0, 0, 0)] * TOTAL_LED_SLOTS
         self._hidraw_failed = False
         self.current_rgb = (255, 0, 128)
         self.current_effect = DEFAULT_EFFECT
@@ -949,7 +1128,7 @@ class LeobogController:
         # Если в прошлый раз был выбран режим "Реакция на нажатие" —
         # слушатель нужно поднять сразу, иначе после автозапуска эффект
         # выглядит выбранным, но не реагирует, пока его не переключить руками.
-        if EFFECTS[self.current_effect]["kind"] == "reactive":
+        if _is_reactive_kind(EFFECTS[self.current_effect]["kind"]):
             self._start_reactive_listener()
 
     def _load_state(self):
@@ -1066,6 +1245,7 @@ class LeobogController:
                 speed=self.speed,
                 touches=list(self.touches),
             )
+        self.last_colors = colors
         for slot, (r, g, b) in enumerate(colors):
             idx = 8 + slot * 3
             if idx + 2 >= PAYLOAD_SIZE:
@@ -1192,7 +1372,9 @@ class LeobogController:
         with self._lock:
             self.touches.append((idx, now))
             self.touches = [
-                (i, tp) for (i, tp) in self.touches if now - tp < REACTIVE_LIFETIME
+                (i, tp)
+                for (i, tp) in self.touches
+                if now - tp < max(REACTIVE_LIFETIME, RING_LIFETIME)
             ]
 
     def set_effect(self, name):
@@ -1204,9 +1386,10 @@ class LeobogController:
             self.current_effect = name
             t = time.monotonic() - self._start_time
             self._send_locked(self._build_payload(t))
-        if new_kind == "reactive" and old_kind != "reactive":
+        new_r, old_r = _is_reactive_kind(new_kind), _is_reactive_kind(old_kind)
+        if new_r and not old_r:
             self._start_reactive_listener()
-        elif new_kind != "reactive" and old_kind == "reactive":
+        elif old_r and not new_r:
             self._stop_reactive_listener()
         self._persist_state()
 
@@ -1272,24 +1455,36 @@ ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("dark-blue")
 
 PALETTE = {
-    "bg": "#121214",
-    "panel": "#19191d",
-    "panel_alt": "#232329",
+    "bg": "#0c0c10",
+    "panel": "#14141a",
+    "panel_alt": "#1d1d26",
+    "edge": "#24242e",
+    "hover": "#2a2a36",
+    "sel_bg": "#1b1f33",
     "accent": "#7c9eff",
+    "accent_default": "#7c9eff",
+    "accent_dim": "#3a4a85",
     "accent_hi": "#9db4ff",
-    "text": "#eaeaf0",
-    "subtext": "#8b8b95",
-    "dim": "#4a4a52",
+    "text": "#f0f0f6",
+    "subtext": "#8e8e9c",
+    "dim": "#4c4c58",
     "ok": "#5ddc97",
     "err": "#ff6b81",
 }
 
-DIR_RIGHT = "Вправо ▶"
-DIR_LEFT = "◀ Влево"
-DIR_DOWN = "Вниз ▼"
-DIR_UP = "▲ Вверх"
-AXIS_H = "⟷ Горизонталь"
-AXIS_V = "↕ Вертикаль"
+# Траектория = ось + направление одним выбором: (подпись, стрелка, ось, знак)
+TRAJECTORIES = [
+    ("Вправо", "→", "h", 1),
+    ("Влево", "←", "h", -1),
+    ("Вниз", "↓", "v", 1),
+    ("Вверх", "↑", "v", -1),
+]
+DIR_RIGHT = "Вправо"
+DIR_LEFT = "Влево"
+DIR_DOWN = "Вниз"
+DIR_UP = "Вверх"
+AXIS_H = "Гориз."
+AXIS_V = "Вертик."
 
 PRESET_COLORS = [
     ("Красный", (255, 0, 0)),
@@ -1312,16 +1507,21 @@ PRESET_COLORS = [
 
 
 class ColorWheel(ctk.CTkFrame):
-    def __init__(self, master, size=168, on_change=None, **kwargs):
+    """Цветовой круг. Всё (диск, обводка, курсор) рисуется через PIL с
+    суперсэмплингом и отдаётся в Tk одной готовой картинкой на непрозрачном
+    фоне панели — поэтому края гладкие, без зубцов, а курсор чёткий."""
+
+    SS = 4  # суперсэмплинг
+
+    def __init__(self, master, size=156, on_change=None, **kwargs):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.size = size
-        # диск чуть меньше общего размера — снаружи оставляем место под
-        # аккуратное кольцо-обводку
-        self.radius = size / 2 * 0.86
+        self.radius = size / 2 - 9  # диск; снаружи место под обводку
         self.on_change = on_change
         self._hue = 0.0
         self._sat = 1.0
         self._enabled = True
+        self._anim_job = None
 
         self.canvas = tk.Canvas(
             self,
@@ -1330,148 +1530,139 @@ class ColorWheel(ctk.CTkFrame):
             highlightthickness=0,
             bg=PALETTE["panel"],
             bd=0,
+            cursor="crosshair",
         )
         self.canvas.pack()
 
-        self._wheel_photo = ImageTk.PhotoImage(self._render_wheel())
-        self.canvas.create_image(size / 2, size / 2, image=self._wheel_photo)
-
-        r = 7
-        self._cursor_ring = self.canvas.create_oval(
-            -r, -r, r, r, outline="#ffffff", width=2
-        )
-        self._cursor_dot = self.canvas.create_oval(
-            -2, -2, 2, 2, fill="#11111b", outline=""
-        )
+        self._base = self._render_base()
+        self._photo = ImageTk.PhotoImage(self._base)
+        self._img_id = self.canvas.create_image(0, 0, image=self._photo, anchor="nw")
 
         self.canvas.bind("<Button-1>", self._on_pointer)
         self.canvas.bind("<B1-Motion>", self._on_pointer)
+        self._redraw()
 
-        self._anim_job = None
+    def _render_base(self):
+        size, ss = self.size, self.SS
+        big = size * ss
+        c = big / 2.0
+        r = self.radius * ss
+        panel = _hex_to_rgb(PALETTE["panel"])
 
-    def _render_wheel(self):
-        """Рисует цветовой диск + аккуратное сглаженное кольцо-обводку
-        с мягким свечением. Рендерим с суперсэмплингом (4x), затем
-        уменьшаем — так кольцо и диск получаются гладкими, без зубцов."""
-        size = self.size
-        scale = 4
-        big = size * scale
-        img = Image.new("RGBA", (big, big), (0, 0, 0, 0))
-        px = img.load()
-        cx = cy = big / 2.0
-        r = self.radius * scale
-        for y in range(big):
-            dy = y - cy
-            for x in range(big):
-                dx = x - cx
-                dist = math.hypot(dx, dy)
-                if dist <= r:
-                    angle = (math.degrees(math.atan2(dy, dx)) + 360.0) % 360.0
-                    hue = angle / 360.0
-                    sat = min(1.0, dist / r)
-                    rr, gg, bb = colorsys.hsv_to_rgb(hue, sat, 1.0)
+        # диск считаем только внутри его bbox
+        disc = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+        px = disc.load()
+        lo, hi = int(c - r) - 1, int(c + r) + 2
+        for y in range(max(0, lo), min(big, hi)):
+            dy = y - c
+            for x in range(max(0, lo), min(big, hi)):
+                dx = x - c
+                d = math.hypot(dx, dy)
+                if d <= r:
+                    hue = ((math.degrees(math.atan2(dy, dx)) + 360.0) % 360.0) / 360.0
+                    rr, gg, bb = colorsys.hsv_to_rgb(hue, min(1.0, d / r), 1.0)
                     px[x, y] = (int(rr * 255), int(gg * 255), int(bb * 255), 255)
 
-        draw = ImageDraw.Draw(img)
-        accent = PALETTE["accent"]
-        ar, ag, ab = int(accent[1:3], 16), int(accent[3:5], 16), int(accent[5:7], 16)
-
-        # мягкое внешнее свечение — несколько всё более крупных и прозрачных колец
-        glow_layers = 5
-        for i in range(glow_layers, 0, -1):
-            spread = i * (scale * 1.6)
-            alpha = int(38 * (1 - i / (glow_layers + 1)))
-            draw.ellipse(
-                [cx - r - spread, cy - r - spread, cx + r + spread, cy + r + spread],
-                outline=(ar, ag, ab, alpha),
-                width=int(scale * 1.4),
-            )
-
-        # основное чёткое кольцо
-        ring_w = max(2, int(scale * 1.6))
-        draw.ellipse(
-            [
-                cx - r - ring_w / 2,
-                cy - r - ring_w / 2,
-                cx + r + ring_w / 2,
-                cy + r + ring_w / 2,
-            ],
-            outline=(ar, ag, ab, 255),
-            width=ring_w,
+        img = Image.new("RGBA", (big, big), panel + (255,))
+        # тонкая тень под диском
+        shadow = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+        ImageDraw.Draw(shadow).ellipse(
+            [c - r - ss, c - r + ss, c + r + ss, c + r + 3 * ss], fill=(0, 0, 0, 90)
         )
-        # тонкая яркая внутренняя грань кольца для глубины
-        draw.ellipse(
-            [cx - r - 1, cy - r - 1, cx + r + 1, cy + r + 1],
-            outline=(255, 255, 255, 90),
-            width=max(1, scale // 3),
+        img = Image.alpha_composite(img, shadow)
+        img = Image.alpha_composite(img, disc)
+        d = ImageDraw.Draw(img)
+        # нейтральная тонкая обводка (не зависит от акцента)
+        d.ellipse(
+            [c - r - ss, c - r - ss, c + r + ss, c + r + ss],
+            outline=(255, 255, 255, 38),
+            width=max(1, ss),
         )
+        return img.resize((size, size), Image.LANCZOS).convert("RGB")
 
-        img = img.resize((size, size), Image.LANCZOS)
-        return img
-
-    def _move_cursor(self, hue, sat):
+    def _cursor_xy(self):
         cx = cy = self.size / 2.0
-        ang = math.radians(hue * 360.0)
-        dist = sat * self.radius
-        x = cx + dist * math.cos(ang)
-        y = cy + dist * math.sin(ang)
-        r = 7
-        self.canvas.coords(self._cursor_ring, x - r, y - r, x + r, y + r)
-        self.canvas.coords(self._cursor_dot, x - 2, y - 2, x + 2, y + 2)
+        ang = math.radians(self._hue * 360.0)
+        dist = self._sat * self.radius
+        return cx + dist * math.cos(ang), cy + dist * math.sin(ang)
+
+    def _redraw(self):
+        """Курсор: белое кольцо + тёмная кромка + заливка текущим цветом,
+        с мягкой тенью. Рисуется в суперсэмплинге на маленьком участке."""
+        img = self._base.copy()
+        if self._enabled:
+            x, y = self._cursor_xy()
+            ss = self.SS
+            half = 16
+            ix, iy = int(x) - half, int(y) - half
+            patch = Image.new("RGBA", (2 * half * ss, 2 * half * ss), (0, 0, 0, 0))
+            pd = ImageDraw.Draw(patch)
+            cx = (x - ix) * ss
+            cy = (y - iy) * ss
+
+            def circle(rad, **kw):
+                pd.ellipse(
+                    [cx - rad * ss, cy - rad * ss, cx + rad * ss, cy + rad * ss], **kw
+                )
+
+            circle(10.5, fill=(0, 0, 0, 70))  # тень
+            circle(9.5, fill=(10, 10, 14, 255))  # тёмная кромка
+            circle(8.3, fill=(255, 255, 255, 255))  # белое кольцо
+            circle(6.0, fill=self.get_rgb() + (255,))  # текущий цвет
+            patch = patch.resize((2 * half, 2 * half), Image.LANCZOS)
+            base_rgba = img.convert("RGBA")
+            layer = Image.new("RGBA", img.size, (0, 0, 0, 0))
+            layer.paste(patch, (ix, iy))
+            img = Image.alpha_composite(base_rgba, layer).convert("RGB")
+        self._photo.paste(img)
 
     def _on_pointer(self, event):
         if not self._enabled:
             return
         cx = cy = self.size / 2.0
-        dx = event.x - cx
-        dy = event.y - cy
+        dx, dy = event.x - cx, event.y - cy
         dist = min(math.hypot(dx, dy), self.radius)
-        angle = (math.degrees(math.atan2(dy, dx)) + 360.0) % 360.0
-        hue = angle / 360.0
-        sat = dist / self.radius if self.radius else 0.0
-        self.set_hs(hue, sat, notify=True)
+        hue = ((math.degrees(math.atan2(dy, dx)) + 360.0) % 360.0) / 360.0
+        self.set_hs(hue, dist / self.radius if self.radius else 0.0, notify=True)
 
     def set_hs(self, hue, sat, notify=False):
         self._hue, self._sat = hue, sat
-        self._move_cursor(hue, sat)
+        self._redraw()
         if notify and self.on_change:
             self.on_change(self.get_rgb())
 
     def set_rgb(self, rgb):
         r, g, b = (c / 255.0 for c in rgb)
-        h, s, _v = colorsys.rgb_to_hsv(r, g, b)
-        self.set_hs(h, s if s > 0 else 0.0, notify=False)
+        h, sat, _v = colorsys.rgb_to_hsv(r, g, b)
+        self.set_hs(h, sat if sat > 0 else 0.0, notify=False)
 
     def get_rgb(self):
         r, g, b = colorsys.hsv_to_rgb(self._hue, self._sat, 1.0)
         return (int(r * 255), int(g * 255), int(b * 255))
 
     def set_enabled(self, enabled):
-        self._enabled = enabled
-        ring_state = "normal" if enabled else "hidden"
-        self.canvas.itemconfigure(self._cursor_ring, state=ring_state)
-        self.canvas.itemconfigure(self._cursor_dot, state=ring_state)
+        if enabled != self._enabled:
+            self._enabled = enabled
+            self._redraw()
 
     def animate_to_rgb(self, rgb, duration_ms=280, on_step=None, on_done=None):
         """Плавно 'подъезжает' курсор колеса к позиции статичного цвета."""
         if self._anim_job is not None:
             self.after_cancel(self._anim_job)
             self._anim_job = None
-
         start_rgb = self.get_rgb()
         start_t = time.monotonic()
 
         def step():
-            elapsed_ms = (time.monotonic() - start_t) * 1000.0
-            frac = min(1.0, elapsed_ms / duration_ms)
-            eased = 1 - (1 - frac) ** 3  # ease-out
-            cur_rgb = _mix(start_rgb, rgb, eased)
-            r, g, b = (c / 255.0 for c in cur_rgb)
-            h, s, _v = colorsys.rgb_to_hsv(r, g, b)
-            self._hue, self._sat = h, (s if s > 0 else 0.0)
-            self._move_cursor(self._hue, self._sat)
+            frac = min(1.0, (time.monotonic() - start_t) * 1000.0 / duration_ms)
+            eased = 1 - (1 - frac) ** 3
+            cur = _mix(start_rgb, rgb, eased)
+            r, g, b = (c / 255.0 for c in cur)
+            h, sat, _v = colorsys.rgb_to_hsv(r, g, b)
+            self._hue, self._sat = h, (sat if sat > 0 else 0.0)
+            self._redraw()
             if on_step:
-                on_step(cur_rgb)
+                on_step(cur)
             if frac < 1.0:
                 self._anim_job = self.after(16, step)
             else:
@@ -1484,13 +1675,13 @@ class ColorWheel(ctk.CTkFrame):
 
 
 class PresetPalette(ctk.CTkFrame):
-    """Ряд статичных цветов. Рисуем кружки напрямую на Canvas (а не через
-    CTkButton) — у CTkButton на маленьких размерах цвет 'съедается'
-    внутренними отступами/рамкой темы и выглядит выцветшим. Здесь заливка
-    круга — это ровно тот hex, что передан, без подмешивания темы."""
+    """Ряд готовых цветов. Кружки — сглаженные картинки (PIL), у каждого три
+    состояния: обычное, наведение (крупнее) и выбранное (белое кольцо)."""
+
+    SS = 4
 
     def __init__(
-        self, master, colors, on_select=None, swatch=30, gap=10, cols=8, **kwargs
+        self, master, colors, on_select=None, swatch=26, gap=8, cols=8, **kwargs
     ):
         super().__init__(master, fg_color="transparent", **kwargs)
         self.colors = colors
@@ -1498,10 +1689,11 @@ class PresetPalette(ctk.CTkFrame):
         self.swatch = swatch
         self.gap = gap
         self.cols = cols
-
+        self.cell = swatch + 8  # запас под кольцо выбора
         rows = math.ceil(len(colors) / cols)
-        width = cols * (swatch + gap) - gap
-        height = rows * (swatch + gap) - gap
+        width = cols * self.cell + (cols - 1) * max(0, gap - 8)
+        height = rows * self.cell + (rows - 1) * max(0, gap - 8)
+        self._step = self.cell + max(0, gap - 8)
 
         self.canvas = tk.Canvas(
             self,
@@ -1510,75 +1702,101 @@ class PresetPalette(ctk.CTkFrame):
             highlightthickness=0,
             bg=PALETTE["panel"],
             bd=0,
+            cursor="hand2",
         )
         self.canvas.pack(anchor="w")
 
         self._items = []
         for idx, (name, rgb) in enumerate(colors):
-            col = idx % cols
-            row = idx // cols
-            x0 = col * (swatch + gap)
-            y0 = row * (swatch + gap)
-            x1, y1 = x0 + swatch, y0 + swatch
-            hexc = "#%02x%02x%02x" % rgb
-            oval = self.canvas.create_oval(
-                x0, y0, x1, y1, fill=hexc, outline=PALETTE["dim"], width=1
+            col, row = idx % cols, idx // cols
+            x0, y0 = col * self._step, row * self._step
+            imgs = {
+                st: ImageTk.PhotoImage(self._render(rgb, st))
+                for st in ("normal", "hover", "selected")
+            }
+            item_id = self.canvas.create_image(
+                x0, y0, image=imgs["normal"], anchor="nw"
             )
             self._items.append(
-                {"id": oval, "rgb": rgb, "name": name, "bbox": (x0, y0, x1, y1)}
+                {
+                    "id": item_id,
+                    "rgb": rgb,
+                    "name": name,
+                    "imgs": imgs,
+                    "bbox": (x0, y0, x0 + self.cell, y0 + self.cell),
+                    "state": "normal",
+                }
             )
-
         self.canvas.bind("<Button-1>", self._on_click)
         self.canvas.bind("<Motion>", self._on_motion)
         self.canvas.bind("<Leave>", self._on_leave)
-        self.canvas.configure(cursor="hand2")
-        self._selected_id = None
-        self._hover_id = None
+        self._selected = None
+        self._hover = None
+
+    def _render(self, rgb, state):
+        ss, cell = self.SS, self.cell
+        big = cell * ss
+        c = big / 2.0
+        img = Image.new("RGBA", (big, big), _hex_to_rgb(PALETTE["panel"]) + (255,))
+        d = ImageDraw.Draw(img)
+        r = self.swatch / 2.0 * ss
+        if state == "hover":
+            r += 1.5 * ss
+        if state == "selected":
+            ring = r + 3.2 * ss
+            d.ellipse(
+                [c - ring, c - ring, c + ring, c + ring], fill=(255, 255, 255, 255)
+            )
+            gap_r = r + 1.6 * ss
+            d.ellipse(
+                [c - gap_r, c - gap_r, c + gap_r, c + gap_r],
+                fill=_hex_to_rgb(PALETTE["panel"]) + (255,),
+            )
+        d.ellipse([c - r, c - r, c + r, c + r], fill=tuple(rgb) + (255,))
+        return img.resize((cell, cell), Image.LANCZOS).convert("RGB")
+
+    def _hit(self, event):
+        for item in self._items:
+            x0, y0, x1, y1 = item["bbox"]
+            if x0 <= event.x <= x1 and y0 <= event.y <= y1:
+                return item
+        return None
+
+    def _set_state(self, item, state):
+        if item["state"] != state:
+            item["state"] = state
+            self.canvas.itemconfigure(item["id"], image=item["imgs"][state])
 
     def _on_click(self, event):
-        for item in self._items:
-            x0, y0, x1, y1 = item["bbox"]
-            if x0 <= event.x <= x1 and y0 <= event.y <= y1:
-                self._select(item)
-                return
-
-    def _on_motion(self, event):
-        hovered = None
-        for item in self._items:
-            x0, y0, x1, y1 = item["bbox"]
-            if x0 <= event.x <= x1 and y0 <= event.y <= y1:
-                hovered = item
-                break
-        hovered_id = hovered["id"] if hovered else None
-        if hovered_id == self._hover_id:
+        item = self._hit(event)
+        if item is None:
             return
-        if self._hover_id is not None and self._hover_id != self._selected_id:
-            self.canvas.itemconfigure(self._hover_id, outline=PALETTE["dim"], width=1)
-        if hovered_id is not None and hovered_id != self._selected_id:
-            self.canvas.itemconfigure(hovered_id, outline=PALETTE["accent_hi"], width=2)
-        self._hover_id = hovered_id
-
-    def _on_leave(self, event):
-        if self._hover_id is not None and self._hover_id != self._selected_id:
-            self.canvas.itemconfigure(self._hover_id, outline=PALETTE["dim"], width=1)
-        self._hover_id = None
-
-    def _select(self, item):
-        if self._selected_id is not None:
-            self.canvas.itemconfigure(
-                self._selected_id, outline=PALETTE["dim"], width=1
-            )
-        self.canvas.itemconfigure(item["id"], outline="#ffffff", width=2)
-        self._selected_id = item["id"]
+        if self._selected is not None and self._selected is not item:
+            self._set_state(self._selected, "normal")
+        self._selected = item
+        self._set_state(item, "selected")
         if self.on_select:
             self.on_select(item["rgb"], item["name"])
 
+    def _on_motion(self, event):
+        item = self._hit(event)
+        if item is self._hover:
+            return
+        if self._hover is not None and self._hover is not self._selected:
+            self._set_state(self._hover, "normal")
+        if item is not None and item is not self._selected:
+            self._set_state(item, "hover")
+        self._hover = item
+
+    def _on_leave(self, event):
+        if self._hover is not None and self._hover is not self._selected:
+            self._set_state(self._hover, "normal")
+        self._hover = None
+
     def clear_selection(self):
-        if self._selected_id is not None:
-            self.canvas.itemconfigure(
-                self._selected_id, outline=PALETTE["dim"], width=1
-            )
-            self._selected_id = None
+        if self._selected is not None:
+            self._set_state(self._selected, "normal")
+            self._selected = None
 
 
 class FullWidthDropdown(ctk.CTkFrame):
@@ -1726,6 +1944,363 @@ class FullWidthDropdown(ctk.CTkFrame):
             super().configure(**kwargs)
 
 
+def _hex(rgb):
+    return "#%02x%02x%02x" % tuple(int(max(0, min(255, c))) for c in rgb)
+
+
+def _hex_to_rgb(h):
+    h = h.lstrip("#")
+    return (int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16))
+
+
+def _accent_from_rgb(rgb):
+    """Акцент интерфейса подстраивается под цвет подсветки."""
+    r, g, b = (c / 255.0 for c in rgb)
+    h, s, v = colorsys.rgb_to_hsv(r, g, b)
+    if s < 0.2 or v < 0.15:
+        return PALETTE["accent_default"]
+    rr, gg, bb = colorsys.hsv_to_rgb(h, min(1.0, max(s, 0.55)), 1.0)
+    return _hex((rr * 255, gg * 255, bb * 255))
+
+
+class KeyboardPreview(tk.Canvas):
+    """Живое превью клавиатуры: каждая клавиша окрашена так же, как её
+    светодиод. Работает и без подключённой клавиатуры. Клик по клавише
+    запускает на ней реактивный эффект — удобно проверять режимы."""
+
+    CELL = 37
+    GAP = 3
+    PAD = 14
+    KEYCAP = (26, 26, 34)
+
+    def __init__(self, master, on_key=None, **kwargs):
+        cols = max(i // LED_ROWS for i in KEYMAP.values()) + 1
+        w = self.PAD * 2 + cols * self.CELL + (cols - 1) * self.GAP
+        h = self.PAD * 2 + LED_ROWS * self.CELL + (LED_ROWS - 1) * self.GAP
+        super().__init__(
+            master,
+            width=w,
+            height=h,
+            bg=PALETTE["panel"],
+            highlightthickness=0,
+            bd=0,
+            **kwargs,
+        )
+        self.on_key = on_key
+        self._keys = []
+        self._item_to_idx = {}
+        step = self.CELL + self.GAP
+        edge = PALETTE["edge"]
+        for name, idx in KEYMAP.items():
+            col, row = idx // LED_ROWS, idx % LED_ROWS
+            c0, c1 = KEY_SPANS.get(name, (col, col))
+            x0 = self.PAD + c0 * step
+            y0 = self.PAD + row * step
+            x1 = self.PAD + c1 * step + self.CELL
+            y1 = y0 + self.CELL
+            rect = self._rrect(
+                x0, y0, x1, y1, 8, fill=_hex(self.KEYCAP), outline=edge, width=1
+            )
+            label = KEY_LABELS.get(name, name.upper())
+            size = 8 if len(label) > 2 else 9
+            text = self.create_text(
+                (x0 + x1) / 2,
+                (y0 + y1) / 2,
+                text=label,
+                fill="#9a9aa8",
+                font=("TkDefaultFont", size, "bold"),
+            )
+            self._keys.append(
+                {"idx": idx, "rect": rect, "text": text, "fill": None, "dark": None}
+            )
+            self._item_to_idx[rect] = idx
+            self._item_to_idx[text] = idx
+        self.bind("<Button-1>", self._on_click)
+        self.configure(cursor="hand2")
+
+    def _rrect(self, x0, y0, x1, y1, r, **kw):
+        pts = [
+            x0 + r,
+            y0,
+            x1 - r,
+            y0,
+            x1,
+            y0,
+            x1,
+            y0 + r,
+            x1,
+            y1 - r,
+            x1,
+            y1,
+            x1 - r,
+            y1,
+            x0 + r,
+            y1,
+            x0,
+            y1,
+            x0,
+            y1 - r,
+            x0,
+            y0 + r,
+            x0,
+            y0,
+        ]
+        return self.create_polygon(pts, smooth=True, **kw)
+
+    def _on_click(self, event):
+        item = self.find_closest(event.x, event.y)
+        if item and self.on_key:
+            idx = self._item_to_idx.get(item[0])
+            if idx is not None:
+                self.on_key(idx)
+
+    def update_frame(self, colors):
+        base = self.KEYCAP
+        for k in self._keys:
+            r, g, b = colors[k["idx"]]
+            m = max(r, g, b) / 255.0
+            fill = _hex(
+                tuple(
+                    min(255, int(bc * (1.0 - m) + c)) for bc, c in zip(base, (r, g, b))
+                )
+            )
+            if fill != k["fill"]:
+                k["fill"] = fill
+                self.itemconfigure(k["rect"], fill=fill)
+                lum = 0.299 * r + 0.587 * g + 0.114 * b
+                dark = lum > 150
+                if dark != k["dark"]:
+                    k["dark"] = dark
+                    self.itemconfigure(k["text"], fill="#0e0e12" if dark else "#9a9aa8")
+
+
+def _plain_name(name):
+    """Название режима без ведущего эмодзи (в плитках они рендерятся криво)."""
+    head, _, tail = name.partition(" ")
+    return tail if tail and not head.isalnum() else name
+
+
+class EffectGrid(ctk.CTkFrame):
+    """Режимы подсветки плитками — все видны сразу, один клик."""
+
+    def __init__(self, master, values, command=None, initial=None, cols=3, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.command = command
+        self._current = initial
+        self._accent = PALETTE["accent_default"]
+        self._buttons = {}
+        for c in range(cols):
+            self.grid_columnconfigure(c, weight=1, uniform="eff")
+        for i, name in enumerate(values):
+            b = ctk.CTkButton(
+                self,
+                text=_plain_name(name),
+                anchor="w",
+                height=40,
+                corner_radius=11,
+                font=ctk.CTkFont(size=12),
+                fg_color=PALETTE["panel_alt"],
+                hover_color=PALETTE["hover"],
+                text_color=PALETTE["text"],
+                border_width=1,
+                border_color=PALETTE["panel_alt"],
+                command=lambda n=name: self._pick(n),
+            )
+            b.grid(row=i // cols, column=i % cols, sticky="ew", padx=3, pady=3)
+            self._buttons[name] = b
+        self._refresh()
+
+    def _refresh(self):
+        for n, b in self._buttons.items():
+            sel = n == self._current
+            b.configure(
+                border_color=self._accent if sel else PALETTE["panel_alt"],
+                fg_color=PALETTE["sel_bg"] if sel else PALETTE["panel_alt"],
+            )
+
+    def _pick(self, name):
+        self._current = name
+        self._refresh()
+        if self.command:
+            self.command(name)
+
+    def set(self, name):
+        self._current = name
+        self._refresh()
+
+    def get(self):
+        return self._current
+
+    def set_accent(self, hex_color):
+        self._accent = hex_color
+        self._refresh()
+
+
+_ARROW_CACHE = {}
+
+
+def _arrow_icon(axis, sign, color_hex, px=26):
+    """Чёткая стрелка (PIL, суперсэмплинг) как иконка для кнопки."""
+    key = (axis, sign, color_hex, px)
+    img = _ARROW_CACHE.get(key)
+    if img is None:
+        ss = 6
+        big = px * ss
+        im = Image.new("RGBA", (big, big), (0, 0, 0, 0))
+        d = ImageDraw.Draw(im)
+        col = _hex_to_rgb(color_hex) + (255,)
+        c = big / 2.0
+        L = big * 0.34  # половина длины стрелки
+        H = big * 0.20  # размах наконечника
+        w = max(2, int(big * 0.085))
+        # единичный вектор направления
+        ux, uy = {
+            ("h", 1): (1, 0),
+            ("h", -1): (-1, 0),
+            ("v", 1): (0, 1),
+            ("v", -1): (0, -1),
+        }[(axis, sign)]
+        px_, py_ = -uy, ux  # перпендикуляр
+        tail = (c - ux * L, c - uy * L)
+        tip = (c + ux * L, c + uy * L)
+        d.line([tail, tip], fill=col, width=w)
+        for side in (1, -1):
+            wing = (tip[0] - ux * H + px_ * H * side, tip[1] - uy * H + py_ * H * side)
+            d.line([tip, wing], fill=col, width=w)
+        r = w / 2.0
+        for p in (tail, tip):
+            d.ellipse([p[0] - r, p[1] - r, p[0] + r, p[1] + r], fill=col)
+        for side in (1, -1):
+            wing = (tip[0] - ux * H + px_ * H * side, tip[1] - uy * H + py_ * H * side)
+            d.ellipse([wing[0] - r, wing[1] - r, wing[0] + r, wing[1] + r], fill=col)
+        img = im.resize((px, px), Image.LANCZOS)
+        _ARROW_CACHE[key] = img
+    return ctk.CTkImage(light_image=img, dark_image=img, size=(px, px))
+
+
+class PresetChips(ctk.CTkFrame):
+    """Ряд быстрых значений под ползунком. Подсвечивается тот, что совпадает
+    с текущим значением; ползунок при этом остаётся свободным."""
+
+    def __init__(self, master, values, on_pick, suffix="%", **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.values = list(values)
+        self.on_pick = on_pick
+        self._accent = PALETTE["accent_default"]
+        self._value = None
+        self._buttons = {}
+        for c in range(len(self.values)):
+            self.grid_columnconfigure(c, weight=1, uniform="chip")
+        for c, v in enumerate(self.values):
+            b = ctk.CTkButton(
+                self,
+                text=f"{v}{suffix}",
+                height=26,
+                corner_radius=8,
+                font=ctk.CTkFont(size=11, weight="bold"),
+                fg_color=PALETTE["panel_alt"],
+                hover_color=PALETTE["hover"],
+                text_color=PALETTE["subtext"],
+                border_width=1,
+                border_color=PALETTE["panel_alt"],
+                command=lambda val=v: self.on_pick(val),
+            )
+            b.grid(row=0, column=c, sticky="ew", padx=2)
+            self._buttons[v] = b
+
+    def set_value(self, value):
+        value = round(float(value))
+        if value == self._value:
+            return
+        self._value = value
+        self._refresh()
+
+    def set_accent(self, hex_color):
+        self._accent = hex_color
+        self._refresh()
+
+    def _refresh(self):
+        for v, b in self._buttons.items():
+            sel = v == self._value
+            b.configure(
+                border_color=self._accent if sel else PALETTE["panel_alt"],
+                fg_color=PALETTE["sel_bg"] if sel else PALETTE["panel_alt"],
+                text_color=self._accent if sel else PALETTE["subtext"],
+            )
+
+
+class DirectionPad(ctk.CTkFrame):
+    """Выбор траектории: четыре плитки со стрелками. Один клик задаёт и ось,
+    и направление. Недоступные для текущего режима плитки гаснут."""
+
+    def __init__(self, master, command=None, **kwargs):
+        super().__init__(master, fg_color="transparent", **kwargs)
+        self.command = command
+        self._current = ("h", 1)
+        self._accent = PALETTE["accent_default"]
+        self._allowed = {(a, sg) for _l, _ar, a, sg in TRAJECTORIES}
+        self._buttons = {}
+        for c in range(len(TRAJECTORIES)):
+            self.grid_columnconfigure(c, weight=1, uniform="traj")
+        for c, (label, arrow, axis, sign) in enumerate(TRAJECTORIES):
+            b = ctk.CTkButton(
+                self,
+                text=label,
+                height=64,
+                corner_radius=12,
+                compound="top",
+                image=_arrow_icon(axis, sign, PALETTE["text"]),
+                font=ctk.CTkFont(size=12, weight="bold"),
+                fg_color=PALETTE["panel_alt"],
+                hover_color=PALETTE["hover"],
+                text_color=PALETTE["text"],
+                border_width=1,
+                border_color=PALETTE["panel_alt"],
+                command=lambda a=axis, sg=sign: self._pick(a, sg),
+            )
+            b.grid(row=0, column=c, sticky="ew", padx=3)
+            self._buttons[(axis, sign)] = b
+        self._refresh()
+
+    def _pick(self, axis, sign):
+        if (axis, sign) not in self._allowed:
+            return
+        self._current = (axis, sign)
+        self._refresh()
+        if self.command:
+            self.command(axis, sign)
+
+    def _refresh(self):
+        for key, b in self._buttons.items():
+            allowed = key in self._allowed
+            sel = key == self._current and allowed
+            tcol = (
+                (self._accent if sel else PALETTE["text"])
+                if allowed
+                else PALETTE["dim"]
+            )
+            b.configure(
+                image=_arrow_icon(key[0], key[1], tcol),
+                border_color=self._accent if sel else PALETTE["panel_alt"],
+                fg_color=PALETTE["sel_bg"] if sel else PALETTE["panel_alt"],
+                text_color=tcol,
+                hover_color=PALETTE["hover"] if allowed else PALETTE["panel_alt"],
+                state="normal" if allowed else "disabled",
+            )
+
+    def set(self, axis, sign):
+        self._current = (axis, 1 if sign >= 0 else -1)
+        self._refresh()
+
+    def set_allowed(self, allowed):
+        self._allowed = set(allowed)
+        self._refresh()
+
+    def set_accent(self, hex_color):
+        self._accent = hex_color
+        self._refresh()
+
+
 class App(ctk.CTk):
     def __init__(self, controller: LeobogController):
         super().__init__()
@@ -1734,233 +2309,193 @@ class App(ctk.CTk):
         self.quit_callback = None
         self.tray_available = False
         self._rgb_editing = False
+        self._accent = PALETTE["accent_default"]
+        self._tick_n = 0
+        self._chip_groups = []
 
         self.title("LEOBOG HI75C Studio")
-        self.geometry("900x540")
-        self.minsize(900, 540)
+        self.geometry("1080x764")
+        self.minsize(1080, 764)
         self.resizable(False, False)
         self.configure(fg_color=PALETTE["bg"])
         self.protocol("WM_DELETE_WINDOW", self.hide_window)
 
         self._build_ui()
         self._on_status_change(self.controller.is_connected())
-        self._start_preview_loop()
+        self._tick()
 
-        # Гарантированный источник "нажатий" для режима "Реакция на нажатие":
-        # пока системный evdev-слушатель может упираться в права доступа,
-        # этот способ работает всегда, пока окно приложения в фокусе —
-        # так эффект точно можно проверить и увидеть вживую.
+        # Гарантированный источник "нажатий", пока окно в фокусе (работает
+        # даже если у программы нет прав на чтение /dev/input).
+        self._held = set()
+        self._release_pending = {}
         self.bind_all("<KeyPress>", self._on_local_keypress, add="+")
+        self.bind_all("<KeyRelease>", self._on_local_keyrelease, add="+")
 
-    def _build_ui(self):
-        header = ctk.CTkFrame(self, fg_color="transparent")
-        header.pack(fill="x", padx=24, pady=(22, 4))
-
-        title_row = ctk.CTkFrame(header, fg_color="transparent")
-        title_row.pack(side="left")
-        self.title_icon = ctk.CTkLabel(
-            title_row,
-            text="⌨",
-            font=ctk.CTkFont(size=26),
-            text_color=PALETTE["accent"],
-            width=34,
-        )
-        self.title_icon.pack(side="left", padx=(0, 10))
-        title_box = ctk.CTkFrame(title_row, fg_color="transparent")
-        title_box.pack(side="left")
-        ctk.CTkLabel(
-            title_box,
-            text="LEOBOG HI75C",
-            font=ctk.CTkFont(size=21, weight="bold"),
-            text_color=PALETTE["text"],
-        ).pack(anchor="w")
-        ctk.CTkLabel(
-            title_box,
-            text="RGB Studio",
-            font=ctk.CTkFont(size=11),
-            text_color=PALETTE["dim"],
-        ).pack(anchor="w")
-
-        self.status_chip = ctk.CTkFrame(
-            header,
+    # ---------- построение окна ----------
+    def _card(self, parent):
+        return ctk.CTkFrame(
+            parent,
+            corner_radius=18,
             fg_color=PALETTE["panel"],
-            corner_radius=999,
             border_width=1,
-            border_color=PALETTE["err"],
+            border_color=PALETTE["edge"],
         )
-        self.status_chip.pack(side="right", pady=(2, 0))
-        self.status_dot = ctk.CTkLabel(
-            self.status_chip,
-            text="●",
-            font=ctk.CTkFont(size=12),
-            text_color=PALETTE["err"],
-        )
-        self.status_dot.pack(side="left", padx=(14, 6), pady=7)
-        self.status_lbl = ctk.CTkLabel(
-            self.status_chip,
-            text="Офлайн",
-            font=ctk.CTkFont(size=12, weight="bold"),
+
+    def _label(self, parent, text):
+        return ctk.CTkLabel(
+            parent,
+            text=text,
+            font=ctk.CTkFont(size=10, weight="bold"),
             text_color=PALETTE["subtext"],
         )
-        self.status_lbl.pack(side="left", padx=(0, 14), pady=7)
 
-        divider = ctk.CTkFrame(self, fg_color=PALETTE["panel"], height=1)
-        divider.pack(fill="x", padx=24, pady=(14, 12))
+    def _slider_row(
+        self, parent, title, from_, to, command, value, suffix="%", presets=None
+    ):
+        self._label(parent, title).pack(anchor="w", padx=18, pady=(14, 2))
+        row = ctk.CTkFrame(parent, fg_color="transparent")
+        row.pack(fill="x", padx=18)
+        chips = None
 
+        def on_slide(val):
+            command(val)
+            if chips is not None:
+                chips.set_value(val)
+
+        slider = ctk.CTkSlider(
+            row,
+            from_=from_,
+            to=to,
+            command=on_slide,
+            height=16,
+            progress_color=self._accent,
+            button_color=self._accent,
+            button_hover_color=PALETTE["text"],
+            fg_color=PALETTE["panel_alt"],
+        )
+        slider.set(value)
+        slider.pack(side="left", fill="x", expand=True)
+        lbl = ctk.CTkLabel(
+            row,
+            text=f"{int(value)}{suffix}",
+            width=48,
+            anchor="e",
+            font=ctk.CTkFont(size=12, weight="bold"),
+            text_color=PALETTE["text"],
+        )
+        lbl.pack(side="left", padx=(10, 0))
+
+        if presets:
+
+            def pick(v):
+                slider.set(v)
+                on_slide(v)
+
+            chips = PresetChips(parent, presets, pick, suffix=suffix)
+            chips.pack(fill="x", padx=15, pady=(8, 0))
+            chips.set_value(value)
+            self._chip_groups.append(chips)
+        return slider, lbl
+
+    def _build_ui(self):
+        # --- верхняя полоска: только мелкие кнопки окна и точка-индикатор ---
+        header = ctk.CTkFrame(self, fg_color="transparent")
+        header.pack(fill="x", padx=26, pady=(14, 0))
+        for text, cmd, hov in (
+            ("✕", self._quit, PALETTE["err"]),
+            ("—", self.hide_window, PALETTE["hover"]),
+        ):
+            ctk.CTkButton(
+                header,
+                text=text,
+                width=30,
+                height=26,
+                corner_radius=8,
+                command=cmd,
+                fg_color=PALETTE["panel"],
+                hover_color=hov,
+                text_color=PALETTE["subtext"],
+                border_width=1,
+                border_color=PALETTE["edge"],
+                font=ctk.CTkFont(size=12, weight="bold"),
+            ).pack(side="right", padx=(6, 0))
+        self.status_dot = ctk.CTkLabel(
+            header, text="●", font=ctk.CTkFont(size=12), text_color=PALETTE["err"]
+        )
+        self.status_dot.pack(side="right", padx=(0, 8))
+
+        # --- тело: слева превью + режимы, справа цвет + параметры ---
         body = ctk.CTkFrame(self, fg_color="transparent")
-        body.pack(fill="both", expand=True, padx=24, pady=(0, 12))
-        body.grid_columnconfigure(0, weight=1, uniform="col")
-        body.grid_columnconfigure(1, weight=1, uniform="col")
+        body.pack(fill="both", expand=True, padx=26, pady=(10, 22))
+        body.grid_columnconfigure(0, weight=1)
+        body.grid_columnconfigure(1, weight=0, minsize=364)
         body.grid_rowconfigure(0, weight=1)
 
-        left = ctk.CTkFrame(
-            body,
-            corner_radius=18,
-            fg_color=PALETTE["panel"],
-            border_width=1,
-            border_color=PALETTE["panel_alt"],
-        )
-        left.grid(row=0, column=0, sticky="nsew", padx=(0, 8))
-        right = ctk.CTkFrame(
-            body,
-            corner_radius=18,
-            fg_color=PALETTE["panel"],
-            border_width=1,
-            border_color=PALETTE["panel_alt"],
-        )
-        right.grid(row=0, column=1, sticky="nsew", padx=(8, 0))
+        left = ctk.CTkFrame(body, fg_color="transparent")
+        left.grid(row=0, column=0, sticky="nsew", padx=(0, 14))
+        right = ctk.CTkFrame(body, fg_color="transparent", width=364)
+        right.grid(row=0, column=1, sticky="nsew")
+        right.grid_propagate(False)
+        right.pack_propagate(False)
 
-        self._label(left, "РЕЖИМ").pack(anchor="w", padx=18, pady=(18, 6))
-        self.effect_menu = FullWidthDropdown(
-            left,
+        # режимы
+        modes_card = self._card(left)
+        modes_card.pack(fill="x")
+        self._label(modes_card, "РЕЖИМ").pack(anchor="w", padx=18, pady=(14, 6))
+        self.effect_grid = EffectGrid(
+            modes_card,
             values=list(EFFECTS.keys()),
             command=self._on_effect_change,
             initial=self.controller.current_effect,
+            cols=4,
         )
-        self.effect_menu.pack(fill="x", padx=18, pady=(0, 16))
+        self.effect_grid.pack(fill="x", padx=14, pady=(0, 12))
 
-        self.axis_title = self._label(left, "ОСЬ")
-        self.axis_title.pack(anchor="w", padx=18, pady=(0, 6))
-        self.axis_seg = ctk.CTkSegmentedButton(
-            left,
-            values=[AXIS_H, AXIS_V],
-            command=self._on_axis_change,
-            fg_color=PALETTE["panel_alt"],
-            selected_color=PALETTE["accent"],
-            selected_hover_color=PALETTE["accent_hi"],
-            unselected_color=PALETTE["panel_alt"],
-            text_color=PALETTE["text"],
-            corner_radius=10,
-            height=32,
-        )
-        # Ось/направление/скорость восстанавливаются из сохранённого
-        # состояния (последний выбранный режим), а не сбрасываются на
-        # значения по умолчанию при каждом запуске.
-        init_axis = "v" if self.controller.axis == "v" else "h"
-        init_sign = 1 if self.controller.direction >= 0 else -1
-        self.axis_seg.set(AXIS_V if init_axis == "v" else AXIS_H)
-        self.axis_seg.pack(fill="x", padx=18, pady=(0, 14))
+        # превью
+        prev_card = self._card(left)
+        prev_card.pack(fill="both", expand=True, pady=(14, 0))
+        top = ctk.CTkFrame(prev_card, fg_color="transparent")
+        top.pack(fill="x", padx=18, pady=(14, 0))
+        self._label(top, "ПРЕВЬЮ").pack(side="left")
+        ctk.CTkLabel(
+            top,
+            text="клик по клавише — проверить эффект",
+            font=ctk.CTkFont(size=10),
+            text_color=PALETTE["dim"],
+        ).pack(side="right")
+        self.preview = KeyboardPreview(prev_card, on_key=self._on_preview_key)
+        self.preview.pack(padx=10, pady=(2, 10), expand=True)
 
-        self.dir_title = self._label(left, "НАПРАВЛЕНИЕ")
-        self.dir_title.pack(anchor="w", padx=18, pady=(0, 6))
-        init_dir_labels = (
-            (DIR_DOWN, DIR_UP) if init_axis == "v" else (DIR_RIGHT, DIR_LEFT)
-        )
-        self.direction_seg = ctk.CTkSegmentedButton(
-            left,
-            values=list(init_dir_labels),
-            command=self._on_direction_change,
-            fg_color=PALETTE["panel_alt"],
-            selected_color=PALETTE["accent"],
-            selected_hover_color=PALETTE["accent_hi"],
-            unselected_color=PALETTE["panel_alt"],
-            text_color=PALETTE["text"],
-            corner_radius=10,
-            height=32,
-        )
-        self.direction_seg.set(
-            init_dir_labels[0] if init_sign >= 0 else init_dir_labels[1]
-        )
-        self.direction_seg.pack(fill="x", padx=18, pady=(0, 18))
+        # цвет
+        color_card = self._card(right)
+        color_card.pack(fill="x")
+        self._label(color_card, "ЦВЕТ").pack(anchor="w", padx=18, pady=(14, 4))
 
-        self._label(left, "ЯРКОСТЬ").pack(anchor="w", padx=18, pady=(0, 4))
-        brow = ctk.CTkFrame(left, fg_color="transparent")
-        brow.pack(fill="x", padx=18)
-        self.brightness_slider = ctk.CTkSlider(
-            brow,
-            from_=0,
-            to=100,
-            command=self._on_brightness_change,
-            progress_color=PALETTE["accent"],
-            button_color=PALETTE["accent"],
-            button_hover_color=PALETTE["accent_hi"],
-        )
-        self.brightness_slider.set(self.controller.brightness)
-        self.brightness_slider.pack(side="left", fill="x", expand=True)
-        self.brightness_val_lbl = ctk.CTkLabel(
-            brow,
-            text=f"{self.controller.brightness}%",
-            width=42,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=PALETTE["text"],
-        )
-        self.brightness_val_lbl.pack(side="left", padx=(10, 0))
-
-        self._label(left, "СКОРОСТЬ").pack(anchor="w", padx=18, pady=(14, 4))
-        srow = ctk.CTkFrame(left, fg_color="transparent")
-        srow.pack(fill="x", padx=18, pady=(0, 18))
-        self.speed_slider = ctk.CTkSlider(
-            srow,
-            from_=25,
-            to=400,
-            command=self._on_speed_change,
-            progress_color=PALETTE["accent"],
-            button_color=PALETTE["accent"],
-            button_hover_color=PALETTE["accent_hi"],
-        )
-        init_speed_pct = max(25, min(400, round(self.controller.speed * 100)))
-        self.speed_slider.set(init_speed_pct)
-        self.speed_slider.pack(side="left", fill="x", expand=True)
-        self.speed_val_lbl = ctk.CTkLabel(
-            srow,
-            text=f"{init_speed_pct}%",
-            width=42,
-            font=ctk.CTkFont(size=12, weight="bold"),
-            text_color=PALETTE["text"],
-        )
-        self.speed_val_lbl.pack(side="left", padx=(10, 0))
-
-        self._label(right, "ЦВЕТ").pack(anchor="w", padx=18, pady=(18, 6))
-
-        color_row = ctk.CTkFrame(right, fg_color="transparent")
-        color_row.pack(padx=18, pady=(4, 10), fill="x")
-
-        wheel_col = ctk.CTkFrame(color_row, fg_color="transparent")
-        wheel_col.pack(side="left")
+        color_row = ctk.CTkFrame(color_card, fg_color="transparent")
+        color_row.pack(padx=18, pady=(2, 6), fill="x")
         self.color_wheel = ColorWheel(
-            wheel_col, size=148, on_change=self._on_wheel_change
+            color_row, size=150, on_change=self._on_wheel_change
         )
         self.color_wheel.set_rgb(self.controller.current_rgb)
-        self.color_wheel.pack()
+        self.color_wheel.pack(side="left")
 
         rgb_col = ctk.CTkFrame(color_row, fg_color="transparent")
-        rgb_col.pack(side="left", fill="both", expand=True, padx=(18, 0))
-
-        self._label(rgb_col, "RGB").pack(anchor="w", pady=(0, 6))
+        rgb_col.pack(side="left", fill="both", expand=True, padx=(16, 0))
         self.rgb_entries = {}
         for ch in ("R", "G", "B"):
             erow = ctk.CTkFrame(rgb_col, fg_color="transparent")
-            erow.pack(fill="x", pady=4)
+            erow.pack(fill="x", pady=3)
             ctk.CTkLabel(
                 erow,
                 text=ch,
-                width=16,
+                width=14,
                 font=ctk.CTkFont(size=12, weight="bold"),
                 text_color=PALETTE["subtext"],
             ).pack(side="left")
             entry = ctk.CTkEntry(
                 erow,
-                width=64,
+                width=66,
+                height=28,
                 justify="center",
                 fg_color=PALETTE["panel_alt"],
                 text_color=PALETTE["text"],
@@ -1975,25 +2510,25 @@ class App(ctk.CTk):
             entry.bind("<FocusOut>", self._on_rgb_entry_commit)
             entry.pack(side="left", padx=(8, 0))
             self.rgb_entries[ch] = entry
-
-        ctk.CTkButton(
+        self.apply_btn = ctk.CTkButton(
             rgb_col,
             text="Применить",
             command=self._on_rgb_entry_commit,
-            fg_color=PALETTE["accent"],
-            hover_color=PALETTE["accent_hi"],
-            text_color="#14141a",
+            fg_color=PALETTE["accent_dim"],
+            hover_color=PALETTE["hover"],
+            text_color=PALETTE["text"],
             corner_radius=8,
-            height=30,
+            height=28,
             font=ctk.CTkFont(size=12, weight="bold"),
-        ).pack(fill="x", pady=(10, 0))
+        )
+        self.apply_btn.pack(fill="x", pady=(8, 0))
 
-        hex_row = ctk.CTkFrame(right, fg_color="transparent")
-        hex_row.pack(pady=(0, 10))
+        hex_row = ctk.CTkFrame(color_card, fg_color="transparent")
+        hex_row.pack(pady=(2, 6))
         self.hex_swatch = ctk.CTkFrame(
             hex_row,
-            width=18,
-            height=18,
+            width=16,
+            height=16,
             corner_radius=5,
             fg_color="#ffffff",
             border_width=1,
@@ -2004,93 +2539,140 @@ class App(ctk.CTk):
         self.color_hex_lbl = ctk.CTkLabel(
             hex_row,
             text="",
-            font=ctk.CTkFont(size=13, weight="bold"),
+            font=ctk.CTkFont(size=12, weight="bold"),
             text_color=PALETTE["subtext"],
         )
         self.color_hex_lbl.pack(side="left")
 
-        self._label(right, "СТАНДАРТНЫЕ ЦВЕТА").pack(anchor="w", padx=18, pady=(0, 6))
         self.preset_palette = PresetPalette(
-            right,
+            color_card,
             PRESET_COLORS,
             on_select=self._on_preset_click,
-            swatch=28,
-            gap=8,
+            swatch=26,
+            gap=7,
             cols=8,
         )
-        self.preset_palette.pack(padx=18, pady=(0, 12), anchor="w")
+        self.preset_palette.pack(padx=18, pady=(2, 16), anchor="w")
+
+        # параметры
+        params_card = self._card(right)
+        params_card.pack(fill="x", pady=(14, 0))
+
+        self.brightness_slider, self.brightness_val_lbl = self._slider_row(
+            params_card,
+            "ЯРКОСТЬ",
+            0,
+            100,
+            self._on_brightness_change,
+            self.controller.brightness,
+            presets=[0, 25, 50, 75, 100],
+        )
+        init_speed_pct = max(25, min(400, round(self.controller.speed * 100)))
+        self.speed_slider, self.speed_val_lbl = self._slider_row(
+            params_card,
+            "СКОРОСТЬ",
+            25,
+            400,
+            self._on_speed_change,
+            init_speed_pct,
+            presets=[25, 50, 100, 200, 400],
+        )
+
+        init_axis = "v" if self.controller.axis == "v" else "h"
+        init_sign = 1 if self.controller.direction >= 0 else -1
+
+        self.traj_title = self._label(params_card, "ТРАЕКТОРИЯ")
+        self.traj_title.pack(anchor="w", padx=18, pady=(16, 6))
+        self.dir_pad = DirectionPad(params_card, command=self._on_traj_pick)
+        self.dir_pad.set(init_axis, init_sign)
+        self.dir_pad.pack(fill="x", padx=15, pady=(0, 18))
 
         self.tray_hint_lbl = ctk.CTkLabel(
             right,
             text="",
             font=ctk.CTkFont(size=10),
             text_color=PALETTE["dim"],
-            wraplength=280,
+            wraplength=340,
             justify="left",
         )
-        self.tray_hint_lbl.pack(side="bottom", padx=18, pady=(0, 6))
-
-        ctk.CTkLabel(
-            right,
-            text="Все эффекты рендерятся на хосте",
-            font=ctk.CTkFont(size=10),
-            text_color=PALETTE["dim"],
-        ).pack(side="bottom", pady=(0, 4))
-
-        btn_row = ctk.CTkFrame(self, fg_color="transparent")
-        btn_row.pack(side="bottom", padx=24, pady=(0, 20), fill="x")
-        ctk.CTkButton(
-            btn_row,
-            text="🗕  Свернуть в трей",
-            command=self.hide_window,
-            fg_color=PALETTE["panel_alt"],
-            hover_color=PALETTE["dim"],
-            text_color=PALETTE["text"],
-            corner_radius=12,
-            height=40,
-            font=ctk.CTkFont(size=13, weight="bold"),
-            border_width=1,
-            border_color=PALETTE["panel_alt"],
-        ).pack(side="left", expand=True, fill="x", padx=(0, 6))
-        ctk.CTkButton(
-            btn_row,
-            text="✕  Выход",
-            command=self._quit,
-            fg_color=PALETTE["err"],
-            hover_color="#e0687d",
-            text_color="#14141a",
-            corner_radius=12,
-            height=40,
-            font=ctk.CTkFont(size=13, weight="bold"),
-        ).pack(side="left", expand=True, fill="x", padx=(6, 0))
+        self.tray_hint_lbl.pack(anchor="w", padx=6, pady=(10, 0))
 
         self._update_ui_state()
+        self._apply_accent(self._accent, force=True)
 
-    def _label(self, parent, text):
-        return ctk.CTkLabel(
+    def _segmented(self, parent, values, command):
+        return ctk.CTkSegmentedButton(
             parent,
-            text=text,
-            font=ctk.CTkFont(size=10, weight="bold"),
-            text_color=PALETTE["subtext"],
+            values=values,
+            command=command,
+            fg_color=PALETTE["panel_alt"],
+            selected_color=PALETTE["accent_dim"],
+            selected_hover_color=PALETTE["accent_dim"],
+            unselected_color=PALETTE["panel_alt"],
+            unselected_hover_color=PALETTE["hover"],
+            text_color=PALETTE["text"],
+            corner_radius=10,
+            height=32,
         )
 
-    def _start_preview_loop(self):
-        self._update_color_preview()
-        self.after(80, self._start_preview_loop)
+    # ---------- акцент, превью, синхронизация ----------
+    def _apply_accent(self, hex_color, force=False):
+        if hex_color == self._accent and not force:
+            return
+        self._accent = hex_color
+        dim = _hex(
+            _mix(_hex_to_rgb(hex_color), _hex_to_rgb(PALETTE["panel_alt"]), 0.55)
+        )
+        self.effect_grid.set_accent(hex_color)
+        for sl in (self.brightness_slider, self.speed_slider):
+            sl.configure(progress_color=hex_color, button_color=hex_color)
+        self.dir_pad.set_accent(hex_color)
+        for g in self._chip_groups:
+            g.set_accent(hex_color)
+        self.apply_btn.configure(fg_color=dim)
+
+    def _tick(self):
+        c = self.controller
+        try:
+            with c._lock:
+                eff = c.current_effect
+                rgb = c.current_rgb
+                br = c.brightness
+                d = c.direction
+                ax = c.axis
+                sp = c.speed
+                touches = list(c.touches)
+            t = time.monotonic() - c._start_time
+            colors = render_frame(
+                eff, rgb, br, t, direction=d, axis=ax, speed=sp, touches=touches
+            )
+            self.preview.update_frame(colors)
+            if self._tick_n % 3 == 0:
+                self._update_color_preview()
+        except Exception as e:  # превью не должно ронять программу
+            if self._tick_n % 300 == 0:
+                print(f"[ПРЕВЬЮ] {e}")
+        self._tick_n += 1
+        self.after(33, self._tick)
 
     def _update_color_preview(self):
         r, g, b = self.controller.current_rgb
         factor = self.controller.brightness / 100.0
         rr, gg, bb = (int(c * factor) for c in (r, g, b))
         hex_c = f"#{rr:02x}{gg:02x}{bb:02x}"
-        self.color_hex_lbl.configure(text=hex_c.upper())
-        if hasattr(self, "hex_swatch"):
-            self.hex_swatch.configure(fg_color=hex_c)
+        if EFFECTS[self.controller.current_effect]["uses_color"]:
+            self.color_hex_lbl.configure(
+                text=hex_c.upper(), text_color=PALETTE["subtext"]
+            )
+            self._apply_accent(_accent_from_rgb(self.controller.current_rgb))
+        else:
+            self._apply_accent(PALETTE["accent_default"])
+        self.hex_swatch.configure(fg_color=hex_c)
         self._sync_rgb_entries(self.controller.current_rgb)
 
     def _sync_rgb_entries(self, rgb):
         if self._rgb_editing:
-            return  # пользователь сейчас печатает в одно из полей — не мешаем
+            return  # пользователь сейчас печатает — не мешаем
         for ch, val in zip(("R", "G", "B"), rgb):
             entry = self.rgb_entries.get(ch)
             if entry is None:
@@ -2103,7 +2685,7 @@ class App(ctk.CTk):
     def _on_rgb_focus_in(self, entry=None):
         self._rgb_editing = True
         if entry is not None:
-            entry.configure(border_color=PALETTE["accent"])
+            entry.configure(border_color=self._accent)
 
     def _update_ui_state(self):
         cfg = EFFECTS[self.controller.current_effect]
@@ -2120,36 +2702,56 @@ class App(ctk.CTk):
                 text="ЦВЕТ ЗАДАЁТСЯ АВТОМАТИЧЕСКИ", text_color=PALETTE["dim"]
             )
 
-        self.axis_seg.configure(state="normal" if has_axis else "disabled")
-        self.axis_title.configure(
-            text_color=PALETTE["subtext"] if has_axis else PALETTE["dim"]
-        )
-        self.direction_seg.configure(state="normal" if directional else "disabled")
-        self.dir_title.configure(
+        if directional:
+            if has_axis:
+                allowed = {(ax, sg) for _l, _ar, ax, sg in TRAJECTORIES}
+            else:  # ось фиксирована, меняется только направление
+                cur_ax = "v" if self.controller.axis == "v" else "h"
+                allowed = {(cur_ax, 1), (cur_ax, -1)}
+        else:
+            allowed = set()
+        self.dir_pad.set_allowed(allowed)
+        self.dir_pad.set(self.controller.axis, self.controller.direction)
+        self.traj_title.configure(
             text_color=PALETTE["subtext"] if directional else PALETTE["dim"]
         )
 
+    # ---------- события ----------
     def _on_status_change(self, connected):
         self.after(0, lambda: self._apply_status(connected))
 
     def _on_local_keypress(self, event):
-        # Гарантированный триггер реактивного эффекта, пока окно программы
-        # в фокусе — не зависит от evdev/прав доступа, работает всегда.
-        if EFFECTS[self.controller.current_effect]["kind"] != "reactive":
+        # Гарантированный триггер реактивных эффектов, пока окно в фокусе.
+        key = event.keysym
+        pend = self._release_pending.pop(key, None)
+        if pend is not None:  # релиз+нажатие подряд = автоповтор, не нажатие
+            self.after_cancel(pend)
+            return
+        if key in self._held:  # удержание
+            return
+        self._held.add(key)
+        if not _is_reactive_kind(EFFECTS[self.controller.current_effect]["kind"]):
             return
         self.controller.add_touch(_tk_event_to_idx(event))
 
+    def _on_local_keyrelease(self, event):
+        key = event.keysym
+
+        def done():
+            self._release_pending.pop(key, None)
+            self._held.discard(key)
+
+        self._release_pending[key] = self.after(25, done)
+
+    def _on_preview_key(self, idx):
+        # Клик по клавише в превью = нажатие этой клавиши.
+        if _is_reactive_kind(EFFECTS[self.controller.current_effect]["kind"]):
+            self.controller.add_touch(idx)
+
     def _apply_status(self, connected):
-        if connected:
-            self.status_dot.configure(text_color=PALETTE["ok"])
-            self.status_lbl.configure(text="Подключено", text_color=PALETTE["text"])
-            self.status_chip.configure(border_color=PALETTE["ok"])
-        else:
-            self.status_dot.configure(text_color=PALETTE["err"])
-            self.status_lbl.configure(
-                text="Поиск устройства…", text_color=PALETTE["subtext"]
-            )
-            self.status_chip.configure(border_color=PALETTE["err"])
+        self.status_dot.configure(
+            text_color=PALETTE["ok"] if connected else PALETTE["err"]
+        )
 
     def _on_effect_change(self, name):
         self.controller.set_effect(name)
@@ -2161,7 +2763,7 @@ class App(ctk.CTk):
         self._update_color_preview()
 
     def _on_preset_click(self, rgb, name):
-        # колесо само "уезжает" (курсор плавно скользит) на статичный цвет
+        # колесо само "уезжает" (курсор плавно скользит) на выбранный цвет
         def on_step(cur_rgb):
             self.controller.set_color(cur_rgb)
             self._update_color_preview()
@@ -2192,16 +2794,8 @@ class App(ctk.CTk):
         self.preset_palette.clear_selection()
         self._update_color_preview()
 
-    def _on_axis_change(self, value):
-        axis = "v" if value == AXIS_V else "h"
+    def _on_traj_pick(self, axis, sign):
         self.controller.set_axis(axis)
-        sign = 1 if self.controller.direction >= 0 else -1
-        labels = (DIR_DOWN, DIR_UP) if axis == "v" else (DIR_RIGHT, DIR_LEFT)
-        self.direction_seg.configure(values=list(labels))
-        self.direction_seg.set(labels[0] if sign >= 0 else labels[1])
-
-    def _on_direction_change(self, value):
-        sign = 1 if value in (DIR_RIGHT, DIR_DOWN) else -1
         self.controller.set_direction(sign)
 
     def _on_brightness_change(self, val):
@@ -2221,7 +2815,7 @@ class App(ctk.CTk):
         else:
             self.tray_hint_lbl.configure(
                 text="Иконка трея недоступна в этом окружении (нужен SNI-хост, "
-                "например модуль трея в waybar). Кнопка «Свернуть» сворачивает "
+                "например модуль трея в waybar). Кнопка «—» сворачивает "
                 "окно на панель задач."
             )
 
@@ -2441,7 +3035,7 @@ def run_calibration():
     os.makedirs(STATE_DIR, exist_ok=True)
     with open(KEYMAP_PATH, "w", encoding="utf-8") as f:
         json.dump(mapping, f, indent=1)
-    missing = [k for k in KEY_XY if k not in mapping]
+    missing = [k for k in DEFAULT_KEYMAP if k not in mapping]
     print(f"\nГотово: сопоставлено клавиш — {len(mapping)}, файл {KEYMAP_PATH}")
     if missing:
         print("Не сопоставлены (на них эффект не сработает):", ", ".join(missing))
